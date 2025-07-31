@@ -29,7 +29,8 @@
 #   Test is not applicable, e.g. due to the version of the specification being tested
 #
 # OPTIONAL => "Not Implemented"
-#   Recommended/optional feature of the specifications has been found to be not implemented. Detail message should explain the effect of this feature being unimplemented
+#   Recommended/optional feature of the specifications has been found to be not implemented. Detail message
+#   should explain the effect of this feature being unimplemented
 #
 # DISABLED => "Test Disabled"
 #   Test is disabled due to test suite configuration; change the config or test manually
@@ -38,8 +39,6 @@
 #   Test was not run due to prior responses from the API, which may be OK, or indicate a fault
 import time
 import json
-import re
-import io
 
 from time import sleep
 
@@ -48,7 +47,6 @@ from jsonschema import ValidationError
 from ..GenericTest import GenericTest, NMOSTestException
 from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
-from ..TestHelper import load_resolved_schema
 from ..TestHelper import check_content_type
 from ..TestHelper import WebsocketWorker
 
@@ -57,26 +55,38 @@ from urllib.parse import urlparse
 from .. import Config as CONFIG
 
 from .MatroxSdp import MatroxSdp, MatroxSdpEnums
-from .MatroxSdpCheck import *
+
+from .MatroxSdpCheck import SdpCheckError
+from .MatroxSdpCheck import check_sdp_rfc4175
+from .MatroxSdpCheck import check_sdp_st2110_10
+from .MatroxSdpCheck import check_sdp_st2110_21
+from .MatroxSdpCheck import check_sdp_st2110_20
+from .MatroxSdpCheck import check_sdp_rfc9134
+from .MatroxSdpCheck import check_sdp_st2110_22
+from .MatroxSdpCheck import check_sdp_rfc3551
+from .MatroxSdpCheck import check_sdp_st2110_30
+from .MatroxSdpCheck import check_sdp_st2110_31
 
 QUERY_API_KEY = "query"
 NODE_API_KEY = "node"
 CONNECTION_API_KEY = "connection"
 
-FormatVideo     = "urn:x-nmos:format:video"
-FormatAudio     = "urn:x-nmos:format:audio"
-FormatData      = "urn:x-nmos:format:data"
+FormatVideo = "urn:x-nmos:format:video"
+FormatAudio = "urn:x-nmos:format:audio"
+FormatData = "urn:x-nmos:format:data"
 FormatDataEvent = "urn:x-nmos:format:data.event"
-FormatMux       = "urn:x-nmos:format:mux"
-FormatUnknown   = "urn:x-nmos:format:UNKNOWN"
+FormatMux = "urn:x-nmos:format:mux"
+FormatUnknown = "urn:x-nmos:format:UNKNOWN"
 
-MuxOpaque                   = "video/MP2T"
-MuxFullyDescribedMpeg2TS    = "application/MP2T"
-MuxFullyDescribedGeneric    = "application/mp2t"
+MuxOpaque = "video/MP2T"
+MuxFullyDescribedMpeg2TS = "application/MP2T"
+MuxFullyDescribedGeneric = "application/mp2t"
+
 
 class MatroxSdpTest(GenericTest):
     """
     """
+
     def __init__(self, apis, **kwargs):
         # Don't auto-test /transportfile as it is permitted to generate a 404 when master_enable is false
         omit_paths = [
@@ -94,8 +104,10 @@ class MatroxSdpTest(GenericTest):
         self.query_url = self.apis[QUERY_API_KEY]["url"]
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.connection_url = self.apis[CONNECTION_API_KEY]["url"]
-        self.is04_resources = {"senders": {}, "receivers": {}, "_requested": [], "sources": {}, "flows": {}, "devices": {}, "self": {}}
-        self.is05_resources = {"senders": [], "receivers": [], "_requested": [], "transport_types": {}, "transport_files": {}}
+        self.is04_resources = {"senders": {}, "receivers": {}, "_requested": [], "sources": {}, "flows": {},
+                               "devices": {}, "self": {}}
+        self.is05_resources = {"senders": [], "receivers": [], "_requested": [], "transport_types": {},
+                               "transport_files": {}}
         self.is04_utils = IS04Utils(self.node_url)
         self.is05_utils = IS05Utils(self.connection_url)
         self.is04_query_utils = IS04Utils(self.query_url)
@@ -174,7 +186,8 @@ class MatroxSdpTest(GenericTest):
         return True, ""
 
     def check_response_without_transport_params(self, schema, method, response):
-        """Confirm that a given Requests response conforms to the expected schema and has any expected headers without considering the 'transport_params' attribute"""
+        """Confirm that a given Requests response conforms to the expected schema and has any expected headers without
+           considering the 'transport_params' attribute"""
         ctype_valid, ctype_message = check_content_type(response.headers)
         if not ctype_valid:
             return False, ctype_message
@@ -202,9 +215,6 @@ class MatroxSdpTest(GenericTest):
 
     def test_01(self, test):
         """ """
-        reg_api = self.apis["schemas"]
-        reg_path = reg_api["spec_path"] + "/schemas"
-
         valid, result = self.get_is04_resources("senders")
         if not valid:
             return test.FAIL(result)
@@ -253,22 +263,20 @@ class MatroxSdpTest(GenericTest):
                 found_data_set = False
                 for curr_data in grain_data:
 
-		            # case has Pre && has Post:
-			        # CREATE / UPDATE
-            		#
+                    # case has Pre && has Post:
+                    # CREATE / UPDATE
+                    #
                     # case has Pre == nil && not has Post:
-			        # DELETE
+                    # DELETE
                     #
                     # case not has Pre && has Post:
-			        # CREATE
+                    # CREATE
                     #
-            		# case not haas Pre != nil && not has Post:
-			        # NOP
+                    # case not haas Pre != nil && not has Post:
+                    # NOP
 
                     if "pre" not in curr_data or "post" not in curr_data:
                         continue
-                    pre_data = json.dumps(curr_data["pre"], sort_keys=True)
-                    post_data = json.dumps(curr_data["post"], sort_keys=True)
 
                     if sender_id == curr_data['path']:
                         found_data_set = True
@@ -289,16 +297,16 @@ class MatroxSdpTest(GenericTest):
                     print(response.content)
                 sleep(0.1)
                 iterations -= 1
-        except:
-            return test.FAIL("Error during test 01")
+        except Exception as e:
+            return test.FAIL("Error during test 01: {}".format(e))
 
         return test.PASS()
 
     def test_02(self, test):
-        """ 
+        """
         Test that the SDP transport file matches with the video Sender, Flow and Source of the Node
         """
-        for resource_type in ["senders", "flows", "sources", "devices", "self" ]:
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
             valid, result = self.get_is04_resources(resource_type)
             if not valid:
                 return test.FAIL(result)
@@ -309,17 +317,18 @@ class MatroxSdpTest(GenericTest):
         node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
 
         try:
-            # Testing only uncompressed and JPEG-XS video because other codec like H.26x have have almost no fmtp parameters.
-            # When such new formats are added toIPMX a dedicated test could be used to test what remain visible in the SDP.
+            # Testing only uncompressed and JPEG-XS video because other codec like H.26x have have almost no
+            # fmtp parameters. When such new formats are added toIPMX a dedicated test could be used to test
+            # what remain visible in the SDP.
             raw_video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
-                            and sender["flow_id"] in flow_map
-                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
-                            and flow_map[sender["flow_id"]]["media_type"] == "video/raw"]
+                                 and sender["flow_id"] in flow_map
+                                 and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
+                                 and flow_map[sender["flow_id"]]["media_type"] == "video/raw"]
 
             jxsv_video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
-                            and sender["flow_id"] in flow_map
-                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
-                            and flow_map[sender["flow_id"]]["media_type"] == "video/jxsv"]
+                                  and sender["flow_id"] in flow_map
+                                  and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
+                                  and flow_map[sender["flow_id"]]["media_type"] == "video/jxsv"]
 
             video_senders = raw_video_senders + jxsv_video_senders
 
@@ -335,13 +344,13 @@ class MatroxSdpTest(GenericTest):
                 # check the transport => only RTP is currently supported by IPMX
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Sender {} transport {} is not RTP"
-                                    .format(sender["id"], sender["transport"]))
+                                     .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Sender {} not responding to IS-05 request"
-                                    .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -371,7 +380,8 @@ class MatroxSdpTest(GenericTest):
                     return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
                                      .format(sender["id"], href, manifest_href_response))
 
-                # Create an SDP object and parse the text into it. There must be at least a primary media (no redundancy)
+                # Create an SDP object and parse the text into it. There must be at least a primary media
+                # (no redundancy)
                 sdp = MatroxSdp()
 
                 try:
@@ -393,17 +403,23 @@ class MatroxSdpTest(GenericTest):
 
                 if sdp_width != frame_width or sdp_height != frame_height:
                     return test.FAIL("Sender {} Flow {} frame width {}, height {} mismatch with SDP width {}, height {}"
-                                     .format(sender["id"], sender["flow_id"], frame_width, frame_height, sdp_width, sdp_height))
+                                     .format(sender["id"], sender["flow_id"], frame_width, frame_height,
+                                             sdp_width, sdp_height))
 
                 # Check frame rate num, den
                 rate_num = flow["grain_rate"]["numerator"]
-                rate_den = flow["grain_rate"]["denominator"]
+                rate_den = 1
+
+                if "denominator" in flow["grain_rate"]:
+                    rate_den = flow["grain_rate"]["denominator"]
+
                 sdp_rate_num = sdp.primary_media.exact_frame_rate_numerator
                 sdp_rate_den = sdp.primary_media.exact_frame_rate_denominator
 
                 if sdp_rate_num != rate_num or sdp_rate_den != rate_den:
                     return test.FAIL("Sender {} Flow {} frame rate num {}, den {} mismatch with SDP num {}, den {}"
-                                     .format(sender["id"], sender["flow_id"], rate_num, rate_den, sdp_rate_num, sdp_rate_den))
+                                     .format(sender["id"], sender["flow_id"], rate_num, rate_den,
+                                             sdp_rate_num, sdp_rate_den))
 
                 # Check component depth. There must be at least 3 planes, all having the same depth
                 if len(flow["components"]) < 3:
@@ -418,23 +434,28 @@ class MatroxSdpTest(GenericTest):
 
                         name = component["name"]
 
-                        if (component["width"] != sdp_components[name]["width"] or 
-                            component["height"] != sdp_components[name]["height"] or 
-                            component["bit_depth"] != sdp_components[name]["bit_depth"]):
+                        if (component["width"] != sdp_components[name]["width"] or
+                            component["height"] != sdp_components[name]["height"] or
+                                component["bit_depth"] != sdp_components[name]["bit_depth"]):
 
-                            return test.FAIL("Sender {} Flow {} component {} is not matching with SDP color sampling {} and derived components {}"
-                                            .format(sender["id"], sender["flow_id"], component, sdp.primary_media.sampling, sdp_components[name]))
-                except:
+                            return test.FAIL("Sender {} Flow {} component {} is not matching with SDP color sampling {}"
+                                             " and derived components {}"
+                                             .format(sender["id"], sender["flow_id"], component,
+                                                     sdp.primary_media.sampling, sdp_components[name]))
+                except Exception:
                     return test.FAIL("Sender {} SDP color sampling {} is not supported or not matching with the Flow {}"
                                      .format(sender["id"], sdp.primary_media.sampling, sender["flow_id"]))
 
                 # Check that IPMX "measured" parameters are defined
-                if sdp.primary_media.measured_pix_clk == 0 or sdp.primary_media.h_total == 0 or sdp.primary_media.v_total == 0:
+                if (sdp.primary_media.measured_pix_clk == 0 or sdp.primary_media.h_total == 0 or
+                        sdp.primary_media.v_total == 0):
                     return test.FAIL("Sender {} SDP measured pixclk {} htotal {} and vtotal {} have invalid values"
-                                     .format(sender["id"], sdp.primary_media.measured_pix_clk, sdp.primary_media.h_total, sdp.primary_media.v_total))
+                                     .format(sender["id"], sdp.primary_media.measured_pix_clk,
+                                             sdp.primary_media.h_total, sdp.primary_media.v_total))
 
                 # Check the mediaclk type
-                if sdp.primary_media.media_clock_type != MatroxSdpEnums.Sender and sdp.primary_media.media_clock_type != MatroxSdpEnums.Direct:
+                if (sdp.primary_media.media_clock_type != MatroxSdpEnums.Sender and
+                        sdp.primary_media.media_clock_type != MatroxSdpEnums.Direct):
                     return test.FAIL("Sender {} SDP media clock type has an invalid value {}"
                                      .format(sender["id"], sdp.primary_media.media_clock_type))
 
@@ -446,85 +467,106 @@ class MatroxSdpTest(GenericTest):
                     if clock["name"] == clock_name:
                         clock_found = True
                         if clock["ref_type"] == "ptp":
-                            if sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]:
-                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {} do not match Node clock {}"
-                                                .format(sender["id"], sdp.primary_media.ts_ref_clock_source, sdp.primary_media.ts_delay, sdp.primary_media.ts_ref_clock_ptp_gmid, sdp.primary_media.ts_ref_clock_ptp_version, clock))
+                            if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
+                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                    sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                                 " do not match Node clock {}"
+                                                 .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_delay,
+                                                         sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_version, clock))
                         else:
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
                                 return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
-                                                .format(sender["id"], sdp.primary_media.sdp.primary_media.ts_ref_clock_source, clock))
+                                                 .format(sender["id"],
+                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         clock))
 
                 if not clock_found:
                     return test.FAIL("Sender {} Source {} clock name {} not found in Node clocks {}"
-                                    .format(sender["id"], source["id"], clock_name, node["clocks"]))
+                                     .format(sender["id"], source["id"], clock_name, node["clocks"]))
 
                 # Check the SDP format, encoding and rate versus the Flow media type
                 format, unused, encoding = flow["media_type"].partition("/")
 
-                if format != sdp.primary_media.type or encoding != sdp.primary_media.encoding_name or sdp.primary_media.clock_rate != 90000:
-                    return test.FAIL("Sender {} Flow {} media type {} not matching with sdp type {}, encoding {} and rate {}"
-                                    .format(sender["id"], flow["id"], flow["media_type"], sdp.primary_media.type, sdp.primary_media.encoding_name, sdp.primary_media.clock_rate))
+                if (format != sdp.primary_media.type or encoding != sdp.primary_media.encoding_name or
+                        sdp.primary_media.clock_rate != 90000):
+                    return test.FAIL("Sender {} Flow {} media type {} not matching with sdp type {}, encoding {}"
+                                     " and rate {}"
+                                     .format(sender["id"], flow["id"], flow["media_type"], sdp.primary_media.type,
+                                             sdp.primary_media.encoding_name, sdp.primary_media.clock_rate))
 
                 # Check the multicast address of the transport parameters matches with the SDP
                 primary_transport_params = active["transport_params"][0]
 
-                if primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or primary_transport_params["destination_port"] != sdp.primary_media.port:
-                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {} and port {}"
-                                    .format(sender["id"], primary_transport_params["destination_ip"], primary_transport_params["destination_port"], sdp.primary_media.connection_address, sdp.primary_media.port))
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
 
-                if primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address:
-                    return test.FAIL("Sender {} source filter destination address {} and source address {} not matching with sdp destination {} and source {}"
-                                    .format(sender["id"], primary_transport_params["destination_ip"], primary_transport_params["source_ip"], sdp.primary_media.source_filter_dst_address, sdp.primary_media.source_filter_src_address))
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
 
                 # Make sure the number of legs matches with the number of the SDP medias
                 if len(active["transport_params"]) != sdp.media_count:
                     return test.FAIL("Sender {} legs in transport parameters {} not matching with SDP media count {}"
-                                    .format(sender["id"], len(active["transport_params"]), sdp.media_count))
+                                     .format(sender["id"], len(active["transport_params"]), sdp.media_count))
 
                 # Check the SDP transport file against ST-2110 and RFC requirements
                 if flow["media_type"] == "video/raw":
-                    try:                    
+                    try:
                         check_sdp_rfc4175(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 4175 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_10(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_21(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-21 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_20(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-20 check: {}".format(sender["id"], e.message))
 
                 elif flow["media_type"] == "video/jxsv":
-                    try:                    
+                    try:
                         check_sdp_rfc9134(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 9134 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_10(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_21(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-21 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_22(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
-           
+
                 else:
                     return test.FAIL("Sender {} Flow {} has an unexpected media type {}"
-                                    .format(sender["id"], flow["id"], flow["media_type"]))
+                                     .format(sender["id"], flow["id"], flow["media_type"]))
 
             if len(sender_tested) == 0:
-                return test.UNCLEAR("No ACTIVE Uncompressed or JPEG-XS video Sender found on the Node => PLEASE ACTIVATE A SENDER to TEST")
-            
+                return test.UNCLEAR("No ACTIVE Uncompressed or JPEG-XS video Sender found on the Node => "
+                                    "PLEASE ACTIVATE A SENDER to TEST")
+
             if len(video_senders) > 0:
                 return test.PASS("Senders {} have been tested".format(sender_tested))
 
@@ -534,10 +576,10 @@ class MatroxSdpTest(GenericTest):
         return test.UNCLEAR("No Uncompressed or JPEG-XS video Sender resources were found on the Node")
 
     def test_03(self, test):
-        """ 
+        """
         Test that the SDP transport file matches with the audio Sender, Flow and Source of the Node
         """
-        for resource_type in ["senders", "flows", "sources", "devices", "self" ]:
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
             valid, result = self.get_is04_resources(resource_type)
             if not valid:
                 return test.FAIL(result)
@@ -548,20 +590,21 @@ class MatroxSdpTest(GenericTest):
         node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
 
         try:
-            # Testing only uncompressed and JPEG-XS video because other codec like H.26x have have almost no fmtp parameters.
-            # When such new formats are added toIPMX a dedicated test could be used to test what remain visible in the SDP.
+            # Testing only uncompressed and JPEG-XS video because other codec like H.26x have have almost no
+            # fmtp parameters. When such new formats are added toIPMX a dedicated test could be used to test
+            # what remain visible in the SDP.
             pcm_audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
-                            and sender["flow_id"] in flow_map
-                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"
-                            and (flow_map[sender["flow_id"]]["media_type"] == "audio/L8" or
-                                 flow_map[sender["flow_id"]]["media_type"] == "audio/L16" or 
-                                 flow_map[sender["flow_id"]]["media_type"] == "audio/L20" or 
+                                 and sender["flow_id"] in flow_map
+                                 and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"
+                                 and (flow_map[sender["flow_id"]]["media_type"] == "audio/L8" or
+                                 flow_map[sender["flow_id"]]["media_type"] == "audio/L16" or
+                                 flow_map[sender["flow_id"]]["media_type"] == "audio/L20" or
                                  flow_map[sender["flow_id"]]["media_type"] == "audio/L24")]
 
             am824_audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
-                            and sender["flow_id"] in flow_map
-                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"
-                            and flow_map[sender["flow_id"]]["media_type"] == "audio/AM824"]
+                                   and sender["flow_id"] in flow_map
+                                   and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"
+                                   and flow_map[sender["flow_id"]]["media_type"] == "audio/AM824"]
 
             audio_senders = pcm_audio_senders + am824_audio_senders
 
@@ -577,13 +620,13 @@ class MatroxSdpTest(GenericTest):
                 # check the transport => only RTP is currently supported by IPMX
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Sender {} transport {} is not RTP"
-                                    .format(sender["id"], sender["transport"]))
+                                     .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Sender {} not responding to IS-05 request"
-                                    .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -613,7 +656,8 @@ class MatroxSdpTest(GenericTest):
                     return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
                                      .format(sender["id"], href, manifest_href_response))
 
-                # Create an SDP object and parse the text into it. There must be at least a primary media (no redundancy)
+                # Create an SDP object and parse the text into it. There must be at least a primary
+                # media (no redundancy)
                 sdp = MatroxSdp()
 
                 try:
@@ -637,10 +681,10 @@ class MatroxSdpTest(GenericTest):
                 elif flow["media_type"] == "audio/L20":
                     bit_depth = 20
                     extra_bit_depth = flow["bit_depth"]
-                elif flow["media_type"] ==  "audio/L24":
+                elif flow["media_type"] == "audio/L24":
                     bit_depth = 24
                     extra_bit_depth = flow["bit_depth"]
-                elif flow["media_type"] ==  "audio/AM824":
+                elif flow["media_type"] == "audio/AM824":
                     bit_depth = None
                     extra_bit_depth = None
                 else:
@@ -666,7 +710,7 @@ class MatroxSdpTest(GenericTest):
                                      .format(sender["id"], flow["id"]))
 
                 if bit_depth != sdp_bit_depth:
-                    return test.FAIL("Sender {} Flow {} bit_depth mismatch with SDP bit_depth {}"
+                    return test.FAIL("Sender {} Flow {} bit_depth {} mismatch with SDP bit_depth {}"
                                      .format(sender["id"], flow["id"], bit_depth, sdp_bit_depth))
 
                 channels_count = len(source["channels"])
@@ -678,21 +722,33 @@ class MatroxSdpTest(GenericTest):
 
                 # Check sample rate num, den
                 rate_num = flow["sample_rate"]["numerator"]
-                rate_den = flow["sample_rate"]["denominator"]
+                rate_den = 1
+
+                if "denominator" in flow["sample_rate"]:
+                    rate_den = flow["sample_rate"]["denominator"]
+
                 sdp_rate_num = sdp.primary_media.sample_rate
                 sdp_rate_den = 1
 
                 if sdp_rate_num != rate_num or sdp_rate_den != rate_den:
                     return test.FAIL("Sender {} Flow {} sample rate num {}, den {} mismatch with SDP num {}, den {}"
-                                     .format(sender["id"], sender["flow_id"], rate_num, rate_den, sdp_rate_num, sdp_rate_den))
+                                     .format(sender["id"], sender["flow_id"], rate_num, rate_den, sdp_rate_num,
+                                             sdp_rate_den))
 
                 # The grain_rate if any must match the required sample rate
                 if "grain_rate" in flow:
+
                     grain_rate_num = flow["grain_rate"]["numerator"]
-                    grain_rate_den = flow["grain_rate"]["denominator"]
+                    grain_rate_den = 1
+
+                    if "denominator" in flow["grain_rate"]:
+                        grain_rate_den = flow["grain_rate"]["denominator"]
+
                     if (grain_rate_num != rate_num or grain_rate_den != rate_den):
-                        return test.FAIL("Sender {} Flow {} sample rate num {}, den {} mismatch with grain_rate num {}, den {}"
-                                        .format(sender["id"], sender["flow_id"], rate_num, rate_den, grain_rate_num, grain_rate_den))
+                        return test.FAIL("Sender {} Flow {} sample rate num {}, den {} mismatch with grain_rate"
+                                         " num {}, den {}"
+                                         .format(sender["id"], sender["flow_id"], rate_num, rate_den, grain_rate_num,
+                                                 grain_rate_den))
 
                 # Check that IPMX "measured" parameters are defined
                 if sdp.primary_media.measured_sample_rate == 0:
@@ -700,7 +756,8 @@ class MatroxSdpTest(GenericTest):
                                      .format(sender["id"], sdp.primary_media.measured_sample_rate))
 
                 # Check the mediaclk type
-                if sdp.primary_media.media_clock_type != MatroxSdpEnums.Sender and sdp.primary_media.media_clock_type != MatroxSdpEnums.Direct:
+                if (sdp.primary_media.media_clock_type != MatroxSdpEnums.Sender and
+                        sdp.primary_media.media_clock_type != MatroxSdpEnums.Direct):
                     return test.FAIL("Sender {} SDP media clock type has an invalid value {}"
                                      .format(sender["id"], sdp.primary_media.media_clock_type))
 
@@ -712,69 +769,87 @@ class MatroxSdpTest(GenericTest):
                     if clock["name"] == clock_name:
                         clock_found = True
                         if clock["ref_type"] == "ptp":
-                            if sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]:
-                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {} do not match Node clock {}"
-                                                .format(sender["id"], sdp.primary_media.ts_ref_clock_source, sdp.primary_media.ts_delay, sdp.primary_media.ts_ref_clock_ptp_gmid, sdp.primary_media.ts_ref_clock_ptp_version, clock))
+                            if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
+                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                    sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                                 " do not match Node clock {}"
+                                                 .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_delay,
+                                                         sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_version, clock))
                         else:
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
                                 return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
-                                                .format(sender["id"], sdp.primary_media.sdp.primary_media.ts_ref_clock_source, clock))
+                                                 .format(sender["id"],
+                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         clock))
 
                 if not clock_found:
                     return test.FAIL("Sender {} Source {} clock name {} not found in Node clocks {}"
-                                    .format(sender["id"], source["id"], clock_name, node["clocks"]))
+                                     .format(sender["id"], source["id"], clock_name, node["clocks"]))
 
                 # Check the multicast address of the transport parameters matches with the SDP
                 primary_transport_params = active["transport_params"][0]
 
-                if primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or primary_transport_params["destination_port"] != sdp.primary_media.port:
-                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {} and port {}"
-                                    .format(sender["id"], primary_transport_params["destination_ip"], primary_transport_params["destination_port"], sdp.primary_media.connection_address, sdp.primary_media.port))
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
 
-                if primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address:
-                    return test.FAIL("Sender {} source filter destination address {} and source address {} not matching with sdp destination {} and source {}"
-                                    .format(sender["id"], primary_transport_params["destination_ip"], primary_transport_params["source_ip"], sdp.primary_media.source_filter_dst_address, sdp.primary_media.source_filter_src_address))
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
 
                 # Make sure the number of legs matches with the number of the SDP medias
                 if len(active["transport_params"]) != sdp.media_count:
                     return test.FAIL("Sender {} legs in transport parameters {} not matching with SDP media count {}"
-                                    .format(sender["id"], len(active["transport_params"]), sdp.media_count))
+                                     .format(sender["id"], len(active["transport_params"]), sdp.media_count))
 
                 # Check the SDP transport file against ST-2110 and RFC requirements
                 if flow["media_type"] in ("audio/L8", "audio/L16", "audio/L20", "audio/L24"):
-                    try:                    
+                    try:
                         check_sdp_rfc3551(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 3551 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_10(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_30(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-30 check: {}".format(sender["id"], e.message))
 
                 elif flow["media_type"] == "audio/AM824":
-                    try:                    
+                    try:
                         check_sdp_rfc3551(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 3551 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_10(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
-                    try:                    
+                    try:
                         check_sdp_st2110_31(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-31 check: {}".format(sender["id"], e.message))
-           
+
                 else:
                     return test.FAIL("Sender {} Flow {} has an unexpected media type {}"
-                                    .format(sender["id"], flow["id"], flow["media_type"]))
+                                     .format(sender["id"], flow["id"], flow["media_type"]))
 
             if len(sender_tested) == 0:
-                return test.UNCLEAR("No ACTIVE PCM or ST-2110-31 audio Sender found on the Node => PLEASE ACTIVATE A SENDER to TEST")
+                return test.UNCLEAR("No ACTIVE PCM or ST-2110-31 audio Sender found on the Node => PLEASE ACTIVATE"
+                                    " A SENDER to TEST")
 
             if len(audio_senders) > 0:
                 return test.PASS("Senders {} have been tested".format(sender_tested))
@@ -785,15 +860,12 @@ class MatroxSdpTest(GenericTest):
         return test.UNCLEAR("No PCM or ST-2110-31 audio Sender resources were found on the Node")
 
     def test_04(self, test):
-        """ 
+        """
         Test that the device discovers the registry and register its Node and Device resources in it. Using these
         resource we will verify that the IS-04 and IS-05 API support the v1.2 and v1.1 version of those API (the
         device can support additional versions).
         """
-        REGISTRY_TIMEOUT = 10 #seconds
-
-        reg_api = self.apis["schemas"]
-        reg_path = reg_api["spec_path"] + "/schemas"
+        REGISTRY_TIMEOUT = 10  # seconds
 
         valid, result = self.get_is04_resources("self")
         if not valid:
@@ -827,10 +899,12 @@ class MatroxSdpTest(GenericTest):
                 sleep(0.5)
 
                 if time.monotonic() - found_devices_time_start > REGISTRY_TIMEOUT:
-                    return test.FAIL("Node {} Could not find the Node's devices {} in the registry prior to a timeout of {} seconds".format(node_id, list(device_map.keys()), REGISTRY_TIMEOUT))
+                    return test.FAIL("Node {} Could not find the Node's devices {} in the registry prior to a timeout"
+                                     " of {} seconds".format(node_id, list(device_map.keys()), REGISTRY_TIMEOUT))
 
                 if websocket.did_error_occur():
-                    return test.FAIL("Node {} Error opening websocket: {}".format(node_id, websocket.get_error_message()))
+                    return test.FAIL("Node {} Error opening websocket: {}".format(node_id,
+                                                                                  websocket.get_error_message()))
 
                 received_messages = websocket.get_messages()
 
@@ -845,19 +919,16 @@ class MatroxSdpTest(GenericTest):
 
                 for curr_data in grain_data:
 
-		            # case has Pre && has Post:
-			        # => CREATE / UPDATE
+                    # case has Pre && has Post:
+                    # => CREATE / UPDATE
                     # case has Pre == nil && not has Post:
-			        # => DELETE
+                    # => DELETE
                     # case not has Pre && has Post:
-			        # => CREATE
-            		# case not haas Pre != nil && not has Post:
-			        # => NOP
+                    # => CREATE
+                    # case not haas Pre != nil && not has Post:
+                    # => NOP
                     if "pre" not in curr_data or "post" not in curr_data:
                         continue
-
-                    pre_data = json.dumps(curr_data["pre"], sort_keys=True)
-                    post_data = json.dumps(curr_data["post"], sort_keys=True)
 
                     if curr_data['path'] in device_map.keys():
                         found_devices.append(curr_data['path'])
@@ -888,12 +959,15 @@ class MatroxSdpTest(GenericTest):
                         found_is11 = True
 
                 if not found_is05:
-                    return test.FAIL("Node {} IS-05 API version v1.1 not found in Device's controls {}".format(node_id, device["controls"]))
+                    return test.FAIL("Node {} IS-05 API version v1.1 not found in Device's controls {}"
+                                     .format(node_id, device["controls"]))
                 if not found_is11:
-                    return test.FAIL("Node {} IS-11 API version v1.0 not found in Device's controls {}".format(node_id, device["controls"]))
+                    return test.FAIL("Node {} IS-11 API version v1.0 not found in Device's controls {}"
+                                     .format(node_id, device["controls"]))
 
             if not found_is04:
-                return test.FAIL("Node {} IS-04 API version v1.3 not found in Node API supported versions {}".format(node_id, node["api"]["versions"]))
+                return test.FAIL("Node {} IS-04 API version v1.3 not found in Node API supported versions {}"
+                                 .format(node_id, node["api"]["versions"]))
 
             return test.PASS("Devices {} have been tested".format(found_devices))
 
@@ -964,7 +1038,8 @@ class MatroxSdpTest(GenericTest):
         except json.JSONDecodeError:
             raise NMOSTestException(test.FAIL("Non-JSON response returned for Query API subscription request"))
 
-def GetSdpSamplingAsComponents(sdp : MatroxSdp):
+
+def GetSdpSamplingAsComponents(sdp: MatroxSdp):
 
     width = sdp.primary_media.width
     height = sdp.primary_media.height
@@ -975,62 +1050,62 @@ def GetSdpSamplingAsComponents(sdp : MatroxSdp):
 
     # return an dict of components each having a name, with, height and bit_depth
     if sdp.primary_media.sampling == MatroxSdpEnums.SamplingRGB:
-        r = dict(name= "R", width=width, height=height, bit_depth=depth)
-        g = dict(name= "G", width=width, height=height, bit_depth=depth)
-        b = dict(name= "B", width=width, height=height, bit_depth=depth)
+        r = dict(name="R", width=width, height=height, bit_depth=depth)
+        g = dict(name="G", width=width, height=height, bit_depth=depth)
+        b = dict(name="B", width=width, height=height, bit_depth=depth)
         components[r["name"]] = r
         components[g["name"]] = g
         components[b["name"]] = b
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingRGBA:
-        r = dict(name= "R", width=width, height=height, bit_depth=depth)
-        g = dict(name= "G", width=width, height=height, bit_depth=depth)
-        b = dict(name= "B", width=width, height=height, bit_depth=depth)
-        a = dict(name= "A", width=width, height=height, bit_depth=depth)
+        r = dict(name="R", width=width, height=height, bit_depth=depth)
+        g = dict(name="G", width=width, height=height, bit_depth=depth)
+        b = dict(name="B", width=width, height=height, bit_depth=depth)
+        a = dict(name="A", width=width, height=height, bit_depth=depth)
         components[r["name"]] = r
         components[g["name"]] = g
         components[b["name"]] = b
         components[a["name"]] = a
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingBGR:
-        r = dict(name= "R", width=width, height=height, bit_depth=depth)
-        g = dict(name= "G", width=width, height=height, bit_depth=depth)
-        b = dict(name= "B", width=width, height=height, bit_depth=depth)
+        r = dict(name="R", width=width, height=height, bit_depth=depth)
+        g = dict(name="G", width=width, height=height, bit_depth=depth)
+        b = dict(name="B", width=width, height=height, bit_depth=depth)
         components[r["name"]] = r
         components[g["name"]] = g
         components[b["name"]] = b
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingBGRA:
-        r = dict(name= "R", width=width, height=height, bit_depth=depth)
-        g = dict(name= "G", width=width, height=height, bit_depth=depth)
-        b = dict(name= "B", width=width, height=height, bit_depth=depth)
-        a = dict(name= "A", width=width, height=height, bit_depth=depth)
+        r = dict(name="R", width=width, height=height, bit_depth=depth)
+        g = dict(name="G", width=width, height=height, bit_depth=depth)
+        b = dict(name="B", width=width, height=height, bit_depth=depth)
+        a = dict(name="A", width=width, height=height, bit_depth=depth)
         components[r["name"]] = r
         components[g["name"]] = g
         components[b["name"]] = b
         components[a["name"]] = a
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingYCbCr_444:
-        y = dict(name= "Y", width=width, height=height, bit_depth=depth)
-        u = dict(name= "Cb", width=width, height=height, bit_depth=depth)
-        v = dict(name= "Cr", width=width, height=height, bit_depth=depth)
+        y = dict(name="Y", width=width, height=height, bit_depth=depth)
+        u = dict(name="Cb", width=width, height=height, bit_depth=depth)
+        v = dict(name="Cr", width=width, height=height, bit_depth=depth)
         components[y["name"]] = y
         components[u["name"]] = u
         components[v["name"]] = v
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingYCbCr_422:
-        y = dict(name= "Y", width=width, height=height, bit_depth=depth)
-        u = dict(name= "Cb", width=width/2, height=height, bit_depth=depth)
-        v = dict(name= "Cr", width=width/2, height=height, bit_depth=depth)
+        y = dict(name="Y", width=width, height=height, bit_depth=depth)
+        u = dict(name="Cb", width=width/2, height=height, bit_depth=depth)
+        v = dict(name="Cr", width=width/2, height=height, bit_depth=depth)
         components[y["name"]] = y
         components[u["name"]] = u
         components[v["name"]] = v
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingYCbCr_420:
-        y = dict(name= "Y", width=width, height=height, bit_depth=depth)
-        u = dict(name= "Cb", width=width/2, height=height/2, bit_depth=depth)
-        v = dict(name= "Cr", width=width/2, height=height/2, bit_depth=depth)
+        y = dict(name="Y", width=width, height=height, bit_depth=depth)
+        u = dict(name="Cb", width=width/2, height=height/2, bit_depth=depth)
+        v = dict(name="Cr", width=width/2, height=height/2, bit_depth=depth)
         components[y["name"]] = y
         components[u["name"]] = u
         components[v["name"]] = v
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingYCbCr_411:
-        y = dict(name= "Y", width=width, height=height, bit_depth=depth)
-        u = dict(name= "Cb", width=width/4, height=height, bit_depth=depth)
-        v = dict(name= "Cr", width=width/4, height=height, bit_depth=depth)
+        y = dict(name="Y", width=width, height=height, bit_depth=depth)
+        u = dict(name="Cb", width=width/4, height=height, bit_depth=depth)
+        v = dict(name="Cr", width=width/4, height=height, bit_depth=depth)
         components[y["name"]] = y
         components[u["name"]] = u
         components[v["name"]] = v
@@ -1038,23 +1113,23 @@ def GetSdpSamplingAsComponents(sdp : MatroxSdp):
     # elif sdp.primary_media.sampling == SamplingCLYCbCr_422:
     # elif sdp.primary_media.sampling == SamplingCLYCbCr_420:
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingICtCp_444:
-        i = dict(name= "I", width=width, height=height, bit_depth=depth)
-        t = dict(name= "Ct", width=width, height=height, bit_depth=depth)
-        p = dict(name= "Cp", width=width, height=height, bit_depth=depth)
+        i = dict(name="I", width=width, height=height, bit_depth=depth)
+        t = dict(name="Ct", width=width, height=height, bit_depth=depth)
+        p = dict(name="Cp", width=width, height=height, bit_depth=depth)
         components[i["name"]] = i
         components[t["name"]] = t
         components[p["name"]] = p
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingICtCp_422:
-        i = dict(name= "I", width=width, height=height, bit_depth=depth)
-        t = dict(name= "Ct", width=width/2, height=height, bit_depth=depth)
-        p = dict(name= "Cp", width=width/2, height=height, bit_depth=depth)
+        i = dict(name="I", width=width, height=height, bit_depth=depth)
+        t = dict(name="Ct", width=width/2, height=height, bit_depth=depth)
+        p = dict(name="Cp", width=width/2, height=height, bit_depth=depth)
         components[i["name"]] = i
         components[t["name"]] = t
         components[p["name"]] = p
     elif sdp.primary_media.sampling == MatroxSdpEnums.SamplingICtCp_420:
-        i = dict(name= "I", width=width, height=height, bit_depth=depth)
-        t = dict(name= "Ct", width=width/2, height=height/2, bit_depth=depth)
-        p = dict(name= "Cp", width=width/2, height=height/2, bit_depth=depth)
+        i = dict(name="I", width=width, height=height, bit_depth=depth)
+        t = dict(name="Ct", width=width/2, height=height/2, bit_depth=depth)
+        p = dict(name="Cp", width=width/2, height=height/2, bit_depth=depth)
         components[i["name"]] = i
         components[t["name"]] = t
         components[p["name"]] = p
@@ -1063,5 +1138,5 @@ def GetSdpSamplingAsComponents(sdp : MatroxSdp):
     # elif sdp.primary_media.sampling == SamplingUnspecified:
     else:
         raise ValueError(f"unsupported color sampling {sdp.primary_media.sampling}")
-    
+
     return components

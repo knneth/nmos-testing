@@ -56,7 +56,7 @@ WS_MESSAGE_TIMEOUT = 2
 MQTT_MESSAGE_TIMEOUT = 2
 
 # Number of seconds to wait after performing an API action for the results to be fully visible via IS-04
-API_PROCESSING_TIMEOUT = 1
+API_PROCESSING_TIMEOUT = 3
 
 # Number of seconds to wait before timing out Controller test. Set to None to disable timeout mechanism
 CONTROLLER_TESTING_TIMEOUT = 120
@@ -81,7 +81,7 @@ CACHE_IS_READ_ONLY = True
 # CACHE_IS_READ_ONLY = False
 
 # Timeout for any HTTP requests
-HTTP_TIMEOUT = 1
+HTTP_TIMEOUT = 3
 
 # Restrict the maximum number of resources or test points that time-consuming tests run against.
 # 0 = unlimited (all available resources or test points) for a really thorough test!
@@ -429,7 +429,7 @@ SPECIFICATIONS = {
                 "name": "Matrox Schemas"
             }
         }
-    },    
+    },
     "controller-tests": {
         "repo": None,
         "versions": ["v1.0"],

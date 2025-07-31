@@ -1347,11 +1347,11 @@ class BCP0050301Test(GenericTest):
                     previous_key = active["transport_params"][i][privacy_ecdh_sender_public_key]
 
                     valid, response = self.updateSenderParameter(
-                        sender,
-                        False,
-                        privacy_ecdh_sender_public_key,
-                        previous_key,
-                        staged["transport_params"])
+                                            sender,
+                                            False,
+                                            privacy_ecdh_sender_public_key,
+                                            previous_key,
+                                            staged["transport_params"])
                     if not valid:
                         return test.FAIL("sender {} : fail activation, response {}".format(sender["id"], response))
 

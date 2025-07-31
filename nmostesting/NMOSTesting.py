@@ -564,12 +564,12 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0040101Test.BCP0040101Test
     },
-   "Matrox-Transports": {
+    "Matrox-Transports": {
         "name": "Matrox-Transports",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
-        },{
+        }, {
             "spec_key": "is-05",
             "api_key": "connection"
         }],
@@ -584,13 +584,13 @@ TEST_DEFINITIONS = {
             "api_key": "schemas"
         }],
         "class": MatroxTransportsTest.MatroxTransportsTest
-    },    
-   "Matrox-Capabilities": {
+    },
+    "Matrox-Capabilities": {
         "name": "Matrox-Capabilities",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
-        },{
+        }, {
             "spec_key": "is-05",
             "api_key": "connection"
         }],
@@ -608,16 +608,16 @@ TEST_DEFINITIONS = {
             "api_key": "receiver-caps"
         }],
         "class": MatroxCapabilitiesTest.MatroxCapabilitiesTest
-    },    
-   "Matrox-Sdp": {
+    },
+    "Matrox-Sdp": {
         "name": "Matrox-Sdp",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "query"
-        },{
+        }, {
             "spec_key": "is-04",
             "api_key": "node"
-        },{
+        }, {
             "spec_key": "is-05",
             "api_key": "connection"
         }],
@@ -635,8 +635,9 @@ TEST_DEFINITIONS = {
             "api_key": "receiver-caps"
         }],
         "class": MatroxSdpTest.MatroxSdpTest
-    },    
+    },
 }
+
 
 def enumerate_tests(class_def, describe=False):
     if describe:
@@ -1014,14 +1015,35 @@ def format_test_results(results, endpoints, format, args):
             test_cases.append(test_case)
         formatted = TestSuite(results["def"]["name"] + ": " + ", ".join(results["urls"]), test_cases)
     elif format == "console":
+
         formatted = "\r\nPrinting test results for suite '{}' using API(s) '{}'\r\n" \
                     .format(results["suite"], ", ".join(results["urls"]))
         formatted += "----------------------------\r\n"
-        for test_result in results["result"]:
-            num_extra_dots = max_name_len - len(test_result.name)
-            test_state = str(TestStates.DISABLED if test_result.name in ignored_tests else test_result.state)
-            formatted += "{} ...{} {}\r\n".format(test_result.name, ("." * num_extra_dots), test_state)
-            formatted += "{}\r\n".format(test_result.detail)
+
+        def show(results, state):
+            formatted = ""
+            for test_result in results["result"]:
+                if test_result.state == state:
+                    num_extra_dots = max_name_len - len(test_result.name)
+                    test_state = str(TestStates.DISABLED if test_result.name in ignored_tests else test_result.state)
+                    formatted += "{} ...{} {}\r\n".format(test_result.name, ("." * num_extra_dots), test_state)
+                    if len(test_result.detail) > 0:
+                        num_extra_dots = max_name_len - len("INFO")
+                        formatted += "INFO ...{} {}\r\n".format(("." * num_extra_dots), test_result.detail)
+                    if state in (TestStates.OPTIONAL, TestStates.UNCLEAR, TestStates.WARNING, TestStates.FAIL):
+                        try:
+                            method = getattr(TEST_DEFINITIONS[results["suite"]]["class"], test_result.name)
+                            docstring = inspect.getdoc(method).replace('\n', ' ').replace('\r', '')
+                            num_extra_dots = max_name_len - len("DOC")
+                            formatted += "DOC ...{} {}\r\n".format(("." * num_extra_dots), docstring)
+                        except AttributeError:
+                            pass
+            return formatted
+
+        for state in [TestStates.NA, TestStates.DISABLED, TestStates.MANUAL, TestStates.PASS, TestStates.OPTIONAL,
+                      TestStates.UNCLEAR, TestStates.WARNING, TestStates.FAIL]:
+            formatted += show(results, state)
+
         formatted += "----------------------------\r\n"
         formatted += "Ran {} tests in ".format(len(results["result"])) + "{0:.3f}s".format(total_time) + "\r\n"
     return formatted
@@ -1122,7 +1144,7 @@ def validate_args(args, access_type="cli"):
             return_type = ExitCodes.ERROR
         elif not all(x in enumerate_tests(TEST_DEFINITIONS[args.suite]["class"]) for x in args.tests):
             msg = "ERROR: Test with names '{}' does not exist in test suite '{}'".format(args.tests,
-                                                                                        args.suite)
+                                                                                         args.suite)
             return_type = ExitCodes.ERROR
         elif not args.host or not args.port or not args.version:
             msg = "ERROR: No Hostname(s)/IP address(es) or Port(s) or Version(s) specified"

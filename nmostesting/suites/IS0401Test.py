@@ -1309,20 +1309,21 @@ class IS0401Test(GenericTest):
                     if endpoint["protocol"] == "https" and is_ip_address(endpoint["host"]):
                         api_endpoint_host_warn = True
             for service in node_self["services"]:
-                href = service["href"]
-                # Only warn about these at the end so that more major failures are flagged first
-                # Protocols other than HTTP and WebSocket may be used, so don't incorrectly flag those too
-                if href.startswith("http") and not href.startswith(self.protocol + "://"):
-                    service_href_scheme_warn = True
-                if href.startswith("ws") and not href.startswith(self.ws_protocol + "://"):
-                    service_href_scheme_warn = True
-                if (href.startswith("https://") or href.startswith("wss://")) and \
-                        is_ip_address(urlparse(href).hostname):
-                    service_href_hostname_warn = True
-                if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0 and \
-                        service["type"].startswith("urn:x-nmos:"):
-                    if self.authorization is not service.get("authorization", False):
-                        service_href_auth_warn = True
+                if service["type"].startswith("urn:x-nmos:"):
+                    href = service["href"]
+                    # Only warn about these at the end so that more major failures are flagged first
+                    # Protocols other than HTTP and WebSocket may be used, so don't incorrectly flag those too
+                    if href.startswith("http") and not href.startswith(self.protocol + "://"):
+                        service_href_scheme_warn = True
+                    if href.startswith("ws") and not href.startswith(self.ws_protocol + "://"):
+                        service_href_scheme_warn = True
+                    if (href.startswith("https://") or href.startswith("wss://")) and \
+                            is_ip_address(urlparse(href).hostname):
+                        service_href_hostname_warn = True
+                    if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0 and \
+                            service["type"].startswith("urn:x-nmos:"):
+                        if self.authorization is not service.get("authorization", False):
+                            service_href_auth_warn = True
         except json.JSONDecodeError:
             return test.FAIL("Non-JSON response returned from Node API")
         except KeyError as e:
@@ -1342,20 +1343,21 @@ class IS0401Test(GenericTest):
                 node_devices = response.json()
                 for device in node_devices:
                     for control in device["controls"]:
-                        href = control["href"]
-                        # Only warn about these at the end so that more major failures are flagged first
-                        # Protocols other than HTTP and WebSocket may be used, so don't incorrectly flag those too
-                        if href.startswith("http") and not href.startswith(self.protocol + "://"):
-                            control_href_scheme_warn = True
-                        if href.startswith("ws") and not href.startswith(self.ws_protocol + "://"):
-                            control_href_scheme_warn = True
-                        if (href.startswith("https://") or href.startswith("wss://")) and \
-                                is_ip_address(urlparse(href).hostname):
-                            control_href_hostname_warn = True
-                        if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0 and \
-                                control["type"].startswith("urn:x-nmos:"):
-                            if self.authorization is not control.get("authorization", False):
-                                control_href_auth_warn = True
+                        if control["type"].startswith("urn:x-nmos:"):
+                            href = control["href"]
+                            # Only warn about these at the end so that more major failures are flagged first
+                            # Protocols other than HTTP and WebSocket may be used, so don't incorrectly flag those too
+                            if href.startswith("http") and not href.startswith(self.protocol + "://"):
+                                control_href_scheme_warn = True
+                            if href.startswith("ws") and not href.startswith(self.ws_protocol + "://"):
+                                control_href_scheme_warn = True
+                            if (href.startswith("https://") or href.startswith("wss://")) and \
+                                    is_ip_address(urlparse(href).hostname):
+                                control_href_hostname_warn = True
+                            if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0 and \
+                                    control["type"].startswith("urn:x-nmos:"):
+                                if self.authorization is not control.get("authorization", False):
+                                    control_href_auth_warn = True
             except json.JSONDecodeError:
                 return test.FAIL("Non-JSON response returned from Node API")
             except KeyError as e:
@@ -1436,7 +1438,7 @@ class IS0401Test(GenericTest):
                                      .format(href, response))
 
             if len(node_senders) == 0:
-                return test.UNCLEAR("Not tested. No resources found.")
+                return test.UNCLEAR("No Sender resources were found on the Node.")
 
             if access_error:
                 return test.UNCLEAR("One or more of the tested Senders had null or empty 'manifest_href' or "
@@ -1529,9 +1531,10 @@ class IS0401Test(GenericTest):
 
         grouphint = "urn:x-nmos:tag:grouphint/v1.0"
 
+        found_groups = False
+        found_senders_receivers = False
+
         for target in ["senders", "receivers"]:
-            found_groups = False
-            found_senders_receivers = False
             groups = {"node": {}, "device": {}}
             for resource_name in [target]:
                 valid, response = self.do_request("GET", self.node_url + resource_name)
@@ -1546,7 +1549,7 @@ class IS0401Test(GenericTest):
                                     continue
                                 if not isinstance(tag_value, list) or len(tag_value) == 0:
                                     return test.FAIL("Group tag for {} {} is not an array or has too few items"
-                                                    .format(resource_name.capitalize().rstrip("s"), resource["id"]))
+                                                     .format(resource_name.capitalize().rstrip("s"), resource["id"]))
                                 found_groups = True
                                 for group_def in tag_value:
                                     group_params = group_def.split(":")
@@ -1555,15 +1558,17 @@ class IS0401Test(GenericTest):
                                     # Perform basic validation on the group syntax
                                     if len(group_params) < 2:
                                         return test.FAIL("Group syntax for {} {} has too few parameters"
-                                                        .format(resource_name.capitalize().rstrip("s"), resource["id"]))
+                                                         .format(resource_name.capitalize().rstrip("s"),
+                                                                 resource["id"]))
                                     elif len(group_params) > 3:
                                         return test.FAIL("Group syntax for {} {} has too many parameters"
-                                                        .format(resource_name.capitalize().rstrip("s"), resource["id"]))
+                                                         .format(resource_name.capitalize().rstrip("s"),
+                                                                 resource["id"]))
                                     elif len(group_params) == 3:
                                         if group_params[2] not in ["device", "node"]:
                                             return test.FAIL("Group syntax for {} {} uses an invalid group scope: {}"
-                                                            .format(resource_name.capitalize().rstrip("s"), resource["id"],
-                                                                    group_params[2]))
+                                                             .format(resource_name.capitalize().rstrip("s"),
+                                                                     resource["id"], group_params[2]))
                                         group_scope = group_params[2]
 
                                     # Ensure we have a reference to the group name stored
@@ -1579,8 +1584,8 @@ class IS0401Test(GenericTest):
                                     # Check for duplicate roles within groups
                                     if group_params[1] in group_ref:
                                         return test.FAIL("Duplicate role found in group {} for resources {} and {}"
-                                                        .format(group_params[0], resource["id"],
-                                                                group_ref[group_params[1]]))
+                                                         .format(group_params[0], resource["id"],
+                                                                 group_ref[group_params[1]]))
                                     else:
                                         group_ref[group_params[1]] = resource["id"]
 
