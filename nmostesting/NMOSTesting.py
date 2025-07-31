@@ -905,7 +905,7 @@ def run_tests(test, endpoints, test_selection=["all"]):
                 if test_def.get("urlpath") and "urlpath" not in spec.get("disable_fields", []):
                     url = os.path.join(url, endpoints[index]["urlpath"].lstrip("/\\"))
                 else:
-                    if api_key in CONFIG.SPECIFICATIONS[spec_key]["apis"]:
+                    if spec_key in CONFIG.SPECIFICATIONS and api_key in CONFIG.SPECIFICATIONS[spec_key]["apis"]:
                         url += "x-nmos/{}/".format(api_key)
                         if endpoints[index]["version"] is not None:
                             url += "{}/".format(endpoints[index]["version"])
@@ -938,7 +938,7 @@ def run_tests(test, endpoints, test_selection=["all"]):
                 "spec": None,  # Used inside GenericTest
                 "spec_path": CONFIG.CACHE_PATH + '/' + spec_key
             }
-            if CONFIG.SPECIFICATIONS[spec_key]["repo"] is not None \
+            if spec_key in CONFIG.SPECIFICATIONS and CONFIG.SPECIFICATIONS[spec_key]["repo"] is not None \
                     and api_key in CONFIG.SPECIFICATIONS[spec_key]["apis"]:
                 spec_api = CONFIG.SPECIFICATIONS[spec_key]["apis"][api_key]
                 apis[api_key]["name"] = spec_api["name"]
