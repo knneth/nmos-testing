@@ -1345,8 +1345,8 @@ class BCP0050301Test(GenericTest):
                         return test.DISABLED("sender {} : ECDH mode not supported".format(sender["id"]))
 
                     if active["master_enable"]:
-                        return test.DISABLED("sender {} : testing ECDH private/public keys pair regeneration require"
-                                             " inactive senders".format(sender["id"]))
+                        return test.UNCLEAR("sender {} : testing ECDH private/public keys pair regeneration require"
+                                            " inactive senders".format(sender["id"]))
 
                     # REFERENCE: The [TR-10-13][] expression "becomes inactive", in the context of the ECDH
                     #            private/public key pair, MUST be interpreted as an activation with `master_enable`
@@ -1547,8 +1547,8 @@ class BCP0050301Test(GenericTest):
                         return test.DISABLED("receiver {} : ECDH mode not supported".format(receiver["id"]))
 
                     if active["master_enable"]:
-                        return test.DISABLED("receiver {} : testing ECDH private/public keys pair regeneration require"
-                                             " inactive receivers".format(receiver["id"]))
+                        return test.UNCLEAR("receiver {} : testing ECDH private/public keys pair regeneration require"
+                                            " inactive receivers".format(receiver["id"]))
 
                     # REFERENCE: The [TR-10-13][] expression "becomes inactive", in the context of the ECDH
                     #            private/public key pair, MUST be interpreted as an activation with `master_enable`
