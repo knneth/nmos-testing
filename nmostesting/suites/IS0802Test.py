@@ -22,6 +22,7 @@ from .is08.active import Active
 from .is08.outputs import getOutputList
 from .is08.inputs import getInputList
 from ..NMOSUtils import NMOSUtils
+from ..IPMXUtils import filter_resources
 
 MAPPING_API_KEY = "channelmapping"
 NODE_API_KEY = "node"
@@ -144,7 +145,7 @@ class IS0802Test(GenericTest):
             return False, "Node API did not respond as expected: {}".format(resources)
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type].append(resource)
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:

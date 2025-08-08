@@ -49,6 +49,8 @@ from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
 from ..TestHelper import check_content_type
 from ..TestHelper import WebsocketWorker
+from ..TestResult import Test
+from ..IPMXUtils import filter_resources
 
 from urllib.parse import urlparse
 
@@ -85,6 +87,7 @@ MuxFullyDescribedGeneric = "application/mp2t"
 
 class MatroxSdpTest(GenericTest):
     """
+    Runs Node Tests covering SDP transport files
     """
 
     def __init__(self, apis, **kwargs):
@@ -110,6 +113,7 @@ class MatroxSdpTest(GenericTest):
                                "transport_files": {}}
         self.is04_utils = IS04Utils(self.node_url)
         self.is05_utils = IS05Utils(self.connection_url)
+        self.test = Test("default")
         self.is04_query_utils = IS04Utils(self.query_url)
 
     # Utility function from IS0502Test
@@ -129,7 +133,7 @@ class MatroxSdpTest(GenericTest):
         schema = self.get_schema(NODE_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         if resource_type == "self":
             resource = resources.json()
@@ -137,7 +141,7 @@ class MatroxSdpTest(GenericTest):
             self.is04_resources["_requested"].append(resource_type)
         else:
             try:
-                for resource in resources.json():
+                for resource in filter_resources(resources.json(), resource_type):
                     self.is04_resources[resource_type][resource["id"]] = resource
                 self.is04_resources["_requested"].append(resource_type)
             except json.JSONDecodeError:
@@ -162,13 +166,13 @@ class MatroxSdpTest(GenericTest):
         schema = self.get_schema(CONNECTION_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         # The following call to is05_utils.get_transporttype does not validate against the IS-05 schemas,
-        # which is good fow allowing extended transport. The transporttype-response-schema.json schema is
-        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor spcecific ones.
+        # which is good for allowing extended transport. The transporttype-response-schema.json schema is
+        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor specific ones.
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONNECTION_API_KEY]["version"], "v1.1") >= 0:
@@ -186,8 +190,8 @@ class MatroxSdpTest(GenericTest):
         return True, ""
 
     def check_response_without_transport_params(self, schema, method, response):
-        """Confirm that a given Requests response conforms to the expected schema and has any expected headers without
-           considering the 'transport_params' attribute"""
+        """Confirm that a given Requests response conforms to the expected schema and has any expected headers
+        without considering the 'transport_params' attribute"""
         ctype_valid, ctype_message = check_content_type(response.headers)
         if not ctype_valid:
             return False, ctype_message
@@ -215,6 +219,9 @@ class MatroxSdpTest(GenericTest):
 
     def test_01(self, test):
         """ """
+
+        self.test = test
+
         valid, result = self.get_is04_resources("senders")
         if not valid:
             return test.FAIL(result)
@@ -306,6 +313,9 @@ class MatroxSdpTest(GenericTest):
         """
         Test that the SDP transport file matches with the video Sender, Flow and Source of the Node
         """
+
+        self.test = test
+
         for resource_type in ["senders", "flows", "sources", "devices", "self"]:
             valid, result = self.get_is04_resources(resource_type)
             if not valid:
@@ -579,6 +589,9 @@ class MatroxSdpTest(GenericTest):
         """
         Test that the SDP transport file matches with the audio Sender, Flow and Source of the Node
         """
+
+        self.test = test
+
         for resource_type in ["senders", "flows", "sources", "devices", "self"]:
             valid, result = self.get_is04_resources(resource_type)
             if not valid:
@@ -861,10 +874,11 @@ class MatroxSdpTest(GenericTest):
 
     def test_04(self, test):
         """
-        Test that the device discovers the registry and register its Node and Device resources in it. Using these
-        resource we will verify that the IS-04 and IS-05 API support the v1.2 and v1.1 version of those API (the
-        device can support additional versions).
+        Test that the device discovers the registry and register its Node and Device resources in it.
         """
+
+        self.test = test
+
         REGISTRY_TIMEOUT = 10  # seconds
 
         valid, result = self.get_is04_resources("self")

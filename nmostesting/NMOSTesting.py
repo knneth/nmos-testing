@@ -34,6 +34,8 @@ import pkgutil
 import shlex
 import re
 
+import uuid
+
 from flask import Flask, render_template, flash, request, make_response, jsonify
 from flask_cors import CORS
 from wtforms import Form, validators, StringField, SelectField, SelectMultipleField, IntegerField, HiddenField
@@ -466,8 +468,8 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0060102Test.BCP0060102Test
     },
-    "BCP-005-02": {
-        "name": "BCP-005-02 IPMX/HKEP",
+    "BCP-005-02-01": {
+        "name": "BCP-005-02 NMOS With IPMX/HKEP",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
@@ -493,7 +495,7 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0050201Test.BCP0050201Test
     },
-    "BCP-008-01": {
+    "BCP-008-01-01": {
         "name": "BCP-008-01 Receiver Status Monitoring",
         "specs": [{
             "spec_key": "is-04",
@@ -568,8 +570,8 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP00604Test.BCP00604Test
     },
-    "BCP-005-03": {
-        "name": "IPMX/PEP",
+    "BCP-005-03-01": {
+        "name": "BCP-005-03 NMOS With IPMX/PEP",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
@@ -598,8 +600,8 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0050301Test.BCP0050301Test
     },
-    "BCP-004-02": {
-        "name": "Sender Capabilities",
+    "BCP-004-02-01": {
+        "name": "BCP-004-02 Sender Capabilities",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
@@ -625,8 +627,8 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0040201Test.BCP0040201Test
     },
-    "BCP-004-01": {
-        "name": "Receiver Capabilities",
+    "BCP-004-01-01": {
+        "name": "BCP-004-01 Receiver Capabilities",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "node"
@@ -1200,6 +1202,10 @@ def parse_arguments():
                               help="space separated test names to ignore the results from")
     suite_parser.add_argument('--output', default=DEFAULT_ARGS["output"],
                               help="filename to save test results to (ending .xml or .json), otherwise print to stdout")
+    suite_parser.add_argument('--senders', default=DEFAULT_ARGS["senders"],
+                              help="filename containing the sender GUID to test")
+    suite_parser.add_argument('--receivers', default=DEFAULT_ARGS["receivers"],
+                              help="filename containing the receivers GUID to test")
 
     return parser.parse_args()
 
@@ -1264,6 +1270,12 @@ def validate_args(args, access_type="cli"):
             return_type = ExitCodes.ERROR
         elif args.output and not args.output.endswith("xml") and not args.output.endswith("json"):
             msg = "ERROR: Output file must end with '.xml' or '.json'"
+            return_type = ExitCodes.ERROR
+        elif args.senders and not args.senders.endswith("guid"):
+            msg = "ERROR: senders file must end with '.guid'"
+            return_type = ExitCodes.ERROR
+        elif args.receivers and not args.receivers.endswith("guid"):
+            msg = "ERROR: receivers file must end with '.guid'"
             return_type = ExitCodes.ERROR
     elif access_type == "http" and "suite" not in vars(args):
         msg = "ERROR: 'suite' parameter not found in body of request"
@@ -1350,6 +1362,39 @@ def run_noninteractive_tests(args):
             urlpath = args.urlpath[i]
         endpoints.append({"host": args.host[i], "port": args.port[i], "version": args.version[i],
                           "selector": selector, "urlpath": urlpath})
+
+        CONFIG.senders_guid = None
+        senders = []     # will hold the GUID strings (or uuid.UUID objects)
+
+        if args.senders is not None:
+            with open(args.senders, "r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.strip()          # drop the trailing newline / spaces
+                    if not raw:                 # skip blank lines
+                        continue
+                    try:
+                        guid = str(uuid.UUID(raw))   # validate & normalise
+                        senders.append(guid)         # keep the canonical form
+                    except ValueError:
+                        print(" * ERROR: invalid sender GUID: {raw}")
+            CONFIG.senders_guid = senders
+
+        CONFIG.receivers_guid = None
+        receivers = []     # will hold the GUID strings (or uuid.UUID objects)
+
+        if args.receivers is not None:
+            with open(args.receivers, "r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.strip()          # drop the trailing newline / spaces
+                    if not raw:                 # skip blank lines
+                        continue
+                    try:
+                        guid = str(uuid.UUID(raw))   # validate & normalise
+                        receivers.append(guid)         # keep the canonical form
+                    except ValueError:
+                        print(" * ERROR: invalid receiver GUID: {raw}")
+            CONFIG.receivers_guid = receivers
+
     try:
         if len(args.tests) == 0:
             results = run_tests(args.suite, endpoints, [args.selection])

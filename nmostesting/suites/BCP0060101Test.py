@@ -20,6 +20,7 @@ from jsonschema import ValidationError
 from ..GenericTest import GenericTest, NMOSTestException
 from ..IS04Utils import IS04Utils
 from ..TestHelper import load_resolved_schema
+from ..IPMXUtils import filter_resources
 
 NODE_API_KEY = "node"
 FLOW_REGISTER_KEY = "flow-register"
@@ -54,7 +55,7 @@ class BCP0060101Test(GenericTest):
             return False, "Node API did not respond as expected: {}".format(resources)
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type].append(resource)
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:

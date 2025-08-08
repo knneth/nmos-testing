@@ -23,6 +23,8 @@ from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
 from ..TestHelper import load_resolved_schema
 from ..TestHelper import check_content_type
+from ..TestResult import Test
+from ..IPMXUtils import filter_resources
 
 from .MatroxTransportsTest import getFormatFromTransport
 
@@ -106,6 +108,7 @@ class MatroxCapabilitiesTest(GenericTest):
     """
     Runs Node Tests covering Matrox capabilities
     """
+
     def __init__(self, apis, **kwargs):
         # Don't auto-test /transportfile as it is permitted to generate a 404 when master_enable is false
         omit_paths = [
@@ -123,9 +126,15 @@ class MatroxCapabilitiesTest(GenericTest):
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.connection_url = self.apis[CONNECTION_API_KEY]["url"]
         self.is04_resources = {"senders": {}, "receivers": {}, "_requested": [], "sources": {}, "flows": {}}
-        self.is05_resources = {"senders": [], "receivers": [], "_requested": [], "transport_types": {}, "transport_files": {}}
+        self.is05_resources = {
+            "senders": [],
+            "receivers": [],
+            "_requested": [],
+            "transport_types": {},
+            "transport_files": {}}
         self.is04_utils = IS04Utils(self.node_url)
         self.is05_utils = IS05Utils(self.connection_url)
+        self.test = Test("default")
 
     # Utility function from IS0502Test
     def get_is04_resources(self, resource_type):
@@ -144,10 +153,10 @@ class MatroxCapabilitiesTest(GenericTest):
         schema = self.get_schema(NODE_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type][resource["id"]] = resource
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:
@@ -172,13 +181,13 @@ class MatroxCapabilitiesTest(GenericTest):
         schema = self.get_schema(CONNECTION_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         # The following call to is05_utils.get_transporttype does not validate against the IS-05 schemas,
-        # which is good fow allowing extended transport. The transporttype-response-schema.json schema is
-        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor spcecific ones.
+        # which is good for allowing extended transport. The transporttype-response-schema.json schema is
+        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor specific ones.
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONNECTION_API_KEY]["version"], "v1.1") >= 0:
@@ -196,7 +205,8 @@ class MatroxCapabilitiesTest(GenericTest):
         return True, ""
 
     def check_response_without_transport_params(self, schema, method, response):
-        """Confirm that a given Requests response conforms to the expected schema and has any expected headers without considering the 'transport_params' attribute"""
+        """Confirm that a given Requests response conforms to the expected schema and has any expected headers
+        without considering the 'transport_params' attribute"""
         ctype_valid, ctype_message = check_content_type(response.headers)
         if not ctype_valid:
             return False, ctype_message
@@ -225,6 +235,8 @@ class MatroxCapabilitiesTest(GenericTest):
     def test_01(self, test):
         """Check that version 1.3 or greater of the Node API is available"""
 
+        self.test = test
+
         api = self.apis[NODE_API_KEY]
         if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0:
             valid, result = self.do_request("GET", self.node_url)
@@ -236,8 +248,9 @@ class MatroxCapabilitiesTest(GenericTest):
             return test.FAIL("Node API must be running v1.3 or greater to fully implement BCP-006-01")
 
     def test_02(self, test):
-
         """Check Receiver Capabilities"""
+
+        self.test = test
 
         api = self.apis[RECEIVER_CAPS_KEY]
 
@@ -379,8 +392,9 @@ class MatroxCapabilitiesTest(GenericTest):
         return layer_compatibility_groups, intersection
 
     def test_03(self, test):
-
         """Check Sender Capabilities"""
+
+        self.test = test
 
         api = self.apis[RECEIVER_CAPS_KEY] # same base schemas for both senders and receivers
 
@@ -471,8 +485,9 @@ class MatroxCapabilitiesTest(GenericTest):
             return test.PASS()
         
     def test_04(self, test):
-
         """Check Sender Flows and sub-Flows"""
+
+        self.test = test
 
         valid, result = self.get_is04_resources("senders")
         if not valid:
@@ -605,4 +620,5 @@ class MatroxCapabilitiesTest(GenericTest):
         if warning is not None:
             return test.WARNING(warning)
         else:
-            return test.PASS()        
+            return test.PASS()
+        

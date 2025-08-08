@@ -3102,7 +3102,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        connection_api_senders = IS05Utils(CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL).get_senders()
+        connection_api_senders = IS05Utils(CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL).get_reference_senders()
 
         for format in ["urn:x-nmos:format:video", "urn:x-nmos:format:audio"]:
             self.reference_senders[format] = []
@@ -3413,7 +3413,7 @@ class IS1101Test(GenericTest):
         if not (CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL and CONFIG.IS11_REFERENCE_SENDER_NODE_API_URL):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
-        connection_api_senders = IS05Utils(CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL).get_senders()
+        connection_api_senders = IS05Utils(CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL).get_reference_senders()
         for format in ["urn:x-nmos:format:video", "urn:x-nmos:format:audio"]:
             for sender_id in connection_api_senders:
                 valid, response = self.reference_is04_utils.checkCleanRequestJSON("GET", "senders/" + sender_id)

@@ -17,6 +17,7 @@ from copy import deepcopy
 from fractions import Fraction
 from . import TestHelper
 from .NMOSUtils import NMOSUtils
+from .IPMXUtils import filter_resources
 
 
 class IS04Utils(NMOSUtils):
@@ -50,12 +51,12 @@ class IS04Utils(NMOSUtils):
     def get_senders(self, url=None):
         """Get node senders from the Node API"""
 
-        return self.get_resources("senders", url)
+        return filter_resources(self.get_resources("senders", url), "senders")
 
     def get_receivers(self, url=None):
         """Get node receivers from the Node API"""
 
-        return self.get_resources("receivers", url)
+        return filter_resources(self.get_resources("receivers", url), "receivers")
 
     def get_resources(self, resource, url=None):
         """Get node resources from the Node API"""

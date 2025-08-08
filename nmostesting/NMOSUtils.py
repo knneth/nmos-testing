@@ -72,7 +72,9 @@ DEFAULT_ARGS = {
     "urlpath": [],
     "ignore": [],
     "output": None,
-    "selection": "all"
+    "selection": "all",
+    "senders": None,
+    "receivers": None,
 }
 
 

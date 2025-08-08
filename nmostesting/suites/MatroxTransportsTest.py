@@ -22,25 +22,28 @@ from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
 from ..TestHelper import load_resolved_schema
 from ..TestHelper import check_content_type
+from ..TestResult import Test
+from ..IPMXUtils import filter_resources
 
 from urllib.parse import urlparse
 
 NODE_API_KEY = "node"
 CONNECTION_API_KEY = "connection"
 
-FormatVideo     = "urn:x-nmos:format:video"
-FormatAudio     = "urn:x-nmos:format:audio"
-FormatData      = "urn:x-nmos:format:data"
+FormatVideo = "urn:x-nmos:format:video"
+FormatAudio = "urn:x-nmos:format:audio"
+FormatData = "urn:x-nmos:format:data"
 FormatDataEvent = "urn:x-nmos:format:data.event"
-FormatMux       = "urn:x-nmos:format:mux"
-FormatUnknown   = "urn:x-nmos:format:UNKNOWN"
+FormatMux = "urn:x-nmos:format:mux"
+FormatUnknown = "urn:x-nmos:format:UNKNOWN"
 
-MuxOpaque                   = "video/MP2T"
-MuxFullyDescribedMpeg2TS    = "application/MP2T"
-MuxFullyDescribedGeneric    = "application/mp2t"
-MuxFullyDescribedRtsp       = "application/rtsp"
+MuxOpaque = "video/MP2T"
+MuxFullyDescribedMpeg2TS = "application/MP2T"
+MuxFullyDescribedGeneric = "application/mp2t"
+MuxFullyDescribedRtsp = "application/rtsp"
 
-def getSchemaFromTransport(reg_path, target, transport) :
+
+def getSchemaFromTransport(reg_path, target, transport):
 
     if target != "sender" and target != "receiver":
         raise NMOSTestException("target of getSchemaFromTransport must be 'sender'' or 'receiver'")
@@ -64,7 +67,8 @@ def getSchemaFromTransport(reg_path, target, transport) :
         reg_schema = load_resolved_schema(reg_path, "{}_transport_params_tcp.json".format(target), path_prefix=False)
     return reg_schema
 
-def getPrivacyProtocolFromTransport(transport) :
+
+def getPrivacyProtocolFromTransport(transport):
 
     # todo: missing a pure TCP schema
 
@@ -85,7 +89,8 @@ def getPrivacyProtocolFromTransport(transport) :
 
     return None
 
-def getGroupNameFromTransport(transport) :
+
+def getGroupNameFromTransport(transport):
     if transport in ('urn:x-nmos:transport:rtp', 'urn:x-nmos:transport:rtp.mcast', 'urn:x-nmos:transport:rtp.ucast', 'urn:x-nmos:transport:rtp.tcp'):
         return "RTP"
     elif transport == 'urn:x-nmos:transport:mqtt':
@@ -104,6 +109,7 @@ def getGroupNameFromTransport(transport) :
         return "TCP"
     elif transport in ('urn:x-matrox:transport:rtsp', 'urn:x-matrox:transport:rtsp.tcp'):
         return "RTSP"
+
 
 def getGroupNameFromTags(tags):
     if "urn:x-nmos:tag:grouphint/v1.0" not in tags:
@@ -124,8 +130,9 @@ def getGroupNameFromTags(tags):
         role_index = match.group("role_index")
     else:
         return None
-            
+
     return group_name
+
 
 def getGroupIndexFromTags(tags):
     if "urn:x-nmos:tag:grouphint/v1.0" not in tags:
@@ -146,8 +153,9 @@ def getGroupIndexFromTags(tags):
         role_index = match.group("role_index")
     else:
         return None
-            
+
     return group_index
+
 
 def getRoleNameFromTags(tags):
     if "urn:x-nmos:tag:grouphint/v1.0" not in tags:
@@ -168,7 +176,7 @@ def getRoleNameFromTags(tags):
         role_index = match.group("role_index")
     else:
         return None
-            
+
     return role_in_group
 
 
@@ -191,8 +199,9 @@ def getRoleIndexFromTags(tags):
         role_index = match.group("role_index")
     else:
         return None
-            
+
     return role_index
+
 
 def getGroupHintFromTags(tags):
     if "urn:x-nmos:tag:grouphint/v1.0" not in tags:
@@ -213,10 +222,10 @@ def getGroupHintFromTags(tags):
         role_index = match.group("role_index")
     else:
         return None
-            
+
     return group_name + " " + group_index + ":" + role_in_group + " " + role_index
 
-def getFormatFromTransport(transport) :
+def getFormatFromTransport(transport):
     format = None
     # for RTP based transport the format is not imposed by the transport
     if transport in ('urn:x-matrox:transport:srt.rtp'):
@@ -262,9 +271,15 @@ class MatroxTransportsTest(GenericTest):
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.connection_url = self.apis[CONNECTION_API_KEY]["url"]
         self.is04_resources = {"senders": {}, "receivers": {}, "_requested": [], "sources": {}, "flows": {}}
-        self.is05_resources = {"senders": [], "receivers": [], "_requested": [], "transport_types": {}, "transport_files": {}}
+        self.is05_resources = {
+            "senders": [],
+            "receivers": [],
+            "_requested": [],
+            "transport_types": {},
+            "transport_files": {}}
         self.is04_utils = IS04Utils(self.node_url)
         self.is05_utils = IS05Utils(self.connection_url)
+        self.test = Test("default")
 
     # Utility function from IS0502Test
     def get_is04_resources(self, resource_type):
@@ -283,10 +298,10 @@ class MatroxTransportsTest(GenericTest):
         schema = self.get_schema(NODE_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type][resource["id"]] = resource
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:
@@ -311,13 +326,13 @@ class MatroxTransportsTest(GenericTest):
         schema = self.get_schema(CONNECTION_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         # The following call to is05_utils.get_transporttype does not validate against the IS-05 schemas,
-        # which is good fow allowing extended transport. The transporttype-response-schema.json schema is
-        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor spcecific ones.
+        # which is good for allowing extended transport. The transporttype-response-schema.json schema is
+        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor specific ones.
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONNECTION_API_KEY]["version"], "v1.1") >= 0:
@@ -335,7 +350,8 @@ class MatroxTransportsTest(GenericTest):
         return True, ""
 
     def check_response_without_transport_params(self, schema, method, response):
-        """Confirm that a given Requests response conforms to the expected schema and has any expected headers without considering the 'transport_params' attribute"""
+        """Confirm that a given Requests response conforms to the expected schema and has any expected headers
+        without considering the 'transport_params' attribute"""
         ctype_valid, ctype_message = check_content_type(response.headers)
         if not ctype_valid:
             return False, ctype_message
@@ -364,6 +380,8 @@ class MatroxTransportsTest(GenericTest):
     def test_01(self, test):
         """Check that version 1.3 or greater of the Node API is available"""
 
+        self.test = test
+
         api = self.apis[NODE_API_KEY]
         if self.is04_utils.compare_api_version(api["version"], "v1.3") >= 0:
             valid, result = self.do_request("GET", self.node_url)
@@ -375,8 +393,9 @@ class MatroxTransportsTest(GenericTest):
             return test.FAIL("Node API must be running v1.3 or greater to fully implement BCP-006-01")
 
     def test_02(self, test):
-
         """ Check that senders staged and active transport parameters are valid"""
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -444,8 +463,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_03(self, test):
-
         """ Check that receivers staged and active transport parameters are valid"""
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -507,8 +527,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_04(self, test):
-
         """ Check that receivers format matches with the requirements of the transport """
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
 
@@ -537,8 +558,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_05(self, test):
-
         """ Check that senders that have an associated Flow have a format that matches with the requirements of the transport """
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
 
@@ -579,7 +601,7 @@ class MatroxTransportsTest(GenericTest):
                             else:
                                 if flow["format"] != FormatMux or flow["media_type"] == MuxOpaque:
                                     test.FAIL("sender {} flow {} does not have the proper format {} for having parent flows for the transport {}".format(sender["id"], flow_id, FormatMux, sender["transport"]))
-                        else: 
+                        else:
                             if flow["format"] != format:
                                 test.FAIL("sender {} flow {} does not have the proper format {} for the transport {}".format(sender["id"], flow_id, format, sender["transport"]))
 
@@ -589,8 +611,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_06(self, test):
-
         """ Check that only receivers of mux type implement the *_layers_mapping attributes """
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -639,8 +662,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_07(self, test):
-
         """ Check that senders transport parameters constraints are valid"""
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -692,7 +716,7 @@ class MatroxTransportsTest(GenericTest):
 
             if len(constraints) != len(staged["transport_params"]) or len(constraints) != len(active["transport_params"]):
                 return test.FAIL("sender staged, active and constraints arrays are inconsistent")
-            
+
             # across staged, active and constraints
             i = 0
             for c_params in constraints:
@@ -728,7 +752,7 @@ class MatroxTransportsTest(GenericTest):
                 valid, msg = self.checkSenderTransportParameters(sender["transport"], c_params, staged["transport_params"][i], active["transport_params"][i])
                 if not valid:
                     return test.FAIL("sender active transport parameters is not valid against minimum requirements, error {}".format(msg))
-                
+
                 i = i + 1
 
         if warning is not None:
@@ -737,8 +761,9 @@ class MatroxTransportsTest(GenericTest):
             return test.PASS()
 
     def test_08(self, test):
-
         """ Check that receivers transport parameters constraints are valid and that per transport minimum requirement are met """
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -790,7 +815,7 @@ class MatroxTransportsTest(GenericTest):
 
             if len(constraints) != len(staged["transport_params"]) or len(constraints) != len(active["transport_params"]):
                 return test.FAIL("receiver staged, active and constraints arrays are inconsistent")
-            
+
             # across staged, active and constraints
             i = 0
             for c_params in constraints:
@@ -827,7 +852,7 @@ class MatroxTransportsTest(GenericTest):
                 valid, msg = self.checkReceiverTransportParameters(receiver["transport"], c_params, staged["transport_params"][i], active["transport_params"][i])
                 if not valid:
                     return test.FAIL("receiver active transport parameters is not valid against minimum requirements, error {}".format(msg))
-                
+
                 i = i + 1
 
         if warning is not None:
@@ -874,8 +899,9 @@ class MatroxTransportsTest(GenericTest):
         return False, "unknown transport"
 
     def test_09(self, test):
-
         """ Check that senders grouphint group name matches the transport"""
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -917,10 +943,10 @@ class MatroxTransportsTest(GenericTest):
         else:
             return test.PASS()
 
-    
     def test_10(self, test):
-
         """ Check that receivers grouphint group name matches the transport"""
+
+        self.test = test
 
         reg_api = self.apis["schemas"]
         reg_path = reg_api["spec_path"] + "/schemas"
@@ -977,7 +1003,7 @@ class MatroxTransportsTest(GenericTest):
 
         # check only on active as staged parameters are transient and can as a whole be invalid prior to activation
         if active["protocol"] == "rendezvous" and active["source_port"] != active["destination_port"]:
-                return False, "in 'rendezvous' mode the 'source_port' and 'destination_port' must be equal"
+            return False, "in 'rendezvous' mode the 'source_port' and 'destination_port' must be equal"
 
         return self.checkSenderTransportParametersPEP(transport, constraints, staged, active)
 
@@ -996,12 +1022,12 @@ class MatroxTransportsTest(GenericTest):
 
         # check only on active as staged parameters are transient and can as a whole be invalid prior to activation
         if active["protocol"] == "rendezvous" and active["source_port"] != active["destination_port"]:
-                return False, "in 'rendezvous' mode the 'source_port' and 'destination_port' must be equal"
+            return False, "in 'rendezvous' mode the 'source_port' and 'destination_port' must be equal"
 
         return self.checkReceiverTransportParametersPEP(transport, constraints, staged, active)
 
     def checkSenderTransportParametersUsb(self, transport, constraints, staged, active):
-         
+
         required = ('source_ip', 'source_port')
 
         for p in required:
@@ -1013,7 +1039,7 @@ class MatroxTransportsTest(GenericTest):
                 return False, "required transport parameter {} not found in active".format(p)
 
         return self.checkSenderTransportParametersPEP(transport, constraints, staged, active)
-    
+
     def checkReceiverTransportParametersUsb(self, transport, constraints, staged, active):
 
         required = ('source_ip', 'source_port', 'interface_ip')
@@ -1124,7 +1150,7 @@ class MatroxTransportsTest(GenericTest):
                         return False, "required transport parameter {} not found in staged".format(p)
                     if p not in active.keys():
                         return False, "required transport parameter {} not found in active".format(p)
-                break # check once
+                break  # check once
 
         return self.checkReceiverTransportParametersPEP(transport, constraints, staged, active)
 
@@ -1158,8 +1184,8 @@ class MatroxTransportsTest(GenericTest):
 
     def checkSenderTransportParametersPEP(self, transport, constraints, staged, active):
 
-        pep_required = ('ext_privacy_protocol', 'ext_privacy_mode', 'ext_privacy_iv', 'ext_privacy_key_generator', 'ext_privacy_key_version', 'ext_privacy_key_id' )
-        ecdh_required = ('ext_privacy_ecdh_sender_public_key', 'ext_privacy_ecdh_receiver_public_key', 'ext_privacy_ecdh_curve' )
+        pep_required = ('ext_privacy_protocol', 'ext_privacy_mode', 'ext_privacy_iv', 'ext_privacy_key_generator', 'ext_privacy_key_version', 'ext_privacy_key_id')
+        ecdh_required = ('ext_privacy_ecdh_sender_public_key', 'ext_privacy_ecdh_receiver_public_key', 'ext_privacy_ecdh_curve')
 
         for k in constraints.keys():
 
@@ -1171,7 +1197,7 @@ class MatroxTransportsTest(GenericTest):
                         return False, "required transport parameter {} not found in staged".format(p)
                     if p not in active.keys():
                         return False, "required transport parameter {} not found in active".format(p)
-                    
+
                 protocols = getPrivacyProtocolFromTransport(transport)
 
                 if staged["ext_privacy_protocol"] not in protocols:
@@ -1179,7 +1205,7 @@ class MatroxTransportsTest(GenericTest):
                 if active["ext_privacy_protocol"] not in protocols:
                     return False, "invalid PEP protocol {}, expecting one of {} ".format(active["ext_privacy_protocol"], protocols)
 
-                break # check once
+                break  # check once
 
             if k.startswith("ext_privacy_ecdh_"):
                 for p in ecdh_required:
@@ -1189,7 +1215,7 @@ class MatroxTransportsTest(GenericTest):
                         return False, "required transport parameter {} not found in staged".format(p)
                     if p not in active.keys():
                         return False, "required transport parameter {} not found in active".format(p)
-                break # check once
+                break  # check once
 
         return True, None
 
@@ -1223,8 +1249,8 @@ class MatroxTransportsTest(GenericTest):
 
     def checkReceiverTransportParametersPEP(self, transport, constraints, staged, active):
 
-        pep_required = ('ext_privacy_protocol', 'ext_privacy_mode', 'ext_privacy_iv', 'ext_privacy_key_generator', 'ext_privacy_key_version', 'ext_privacy_key_id' )
-        ecdh_required = ('ext_privacy_ecdh_sender_public_key', 'ext_privacy_ecdh_receiver_public_key', 'ext_privacy_ecdh_curve' )
+        pep_required = ('ext_privacy_protocol', 'ext_privacy_mode', 'ext_privacy_iv', 'ext_privacy_key_generator', 'ext_privacy_key_version', 'ext_privacy_key_id')
+        ecdh_required = ('ext_privacy_ecdh_sender_public_key', 'ext_privacy_ecdh_receiver_public_key', 'ext_privacy_ecdh_curve')
 
         for k in constraints.keys():
 
@@ -1244,7 +1270,7 @@ class MatroxTransportsTest(GenericTest):
                 if active["ext_privacy_protocol"] not in protocols:
                     return False, "invalid PEP protocol {}, expecting one of {} ".format(active["ext_privacy_protocol"], protocols)
 
-                break # check once
+                break  # check once
 
             if k.startswith("ext_privacy_ecdh_"):
                 for p in ecdh_required:
@@ -1254,6 +1280,6 @@ class MatroxTransportsTest(GenericTest):
                         return False, "required transport parameter {} not found in staged".format(p)
                     if p not in active.keys():
                         return False, "required transport parameter {} not found in active".format(p)
-                break # check once
+                break  # check once
 
         return True, None

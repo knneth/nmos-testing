@@ -12,18 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import json
 import re
 import os
 
 from jsonschema import ValidationError
-from pathlib import Path
 
 from ..GenericTest import GenericTest, NMOSTestException
 from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
 from ..TestHelper import load_resolved_schema
 from ..TestHelper import check_content_type
+from ..TestResult import Test
+from ..IPMXUtils import filter_resources
+
+from pathlib import Path
 
 NODE_API_KEY = "node"
 CONNECTION_API_KEY = "connection"
@@ -93,10 +97,15 @@ class BCP0050301Test(GenericTest):
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.connection_url = self.apis[CONNECTION_API_KEY]["url"]
         self.is04_resources = {"senders": {}, "receivers": {}, "_requested": [], "sources": {}, "flows": {}}
-        self.is05_resources = {"senders": [], "receivers": [], "_requested": [],
-                               "transport_types": {}, "transport_files": {}}
+        self.is05_resources = {
+            "senders": [],
+            "receivers": [],
+            "_requested": [],
+            "transport_types": {},
+            "transport_files": {}}
         self.is04_utils = IS04Utils(self.node_url)
         self.is05_utils = IS05Utils(self.connection_url)
+        self.test = Test("default")
 
     # Utility function from IS0502Test
     def get_is04_resources(self, resource_type):
@@ -115,10 +124,10 @@ class BCP0050301Test(GenericTest):
         schema = self.get_schema(NODE_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type][resource["id"]] = resource
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:
@@ -143,13 +152,13 @@ class BCP0050301Test(GenericTest):
         schema = self.get_schema(CONNECTION_API_KEY, "GET", "/" + path_url, resources.status_code)
         valid, message = self.check_response(schema, "GET", resources)
         if not valid:
-            raise NMOSTestException(message)
+            raise NMOSTestException(self.test.FAIL(message))
 
         # The following call to is05_utils.get_transporttype does not validate against the IS-05 schemas,
-        # which is good fow allowing extended transport. The transporttype-response-schema.json schema is
-        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor spcecific ones.
+        # which is good for allowing extended transport. The transporttype-response-schema.json schema is
+        # broken as it does not allow additional transport, nor x-nmos ones, nor vendor specific ones.
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONNECTION_API_KEY]["version"], "v1.1") >= 0:
@@ -197,6 +206,8 @@ class BCP0050301Test(GenericTest):
     def test_01(self, test):
         """Check that version 1.3+ the Node API and version 1.1+ of the Connection API are available"""
 
+        self.test = test
+
         # REFERENCE: A Node compliant with this specification MUST implement IS-04 v1.3 or higher
         # and IS-05 v1.1 or higher
         api = self.apis[NODE_API_KEY]
@@ -219,6 +230,8 @@ class BCP0050301Test(GenericTest):
 
     def test_02(self, test):
         """ Check that senders transport parameters having 'ext_privacy' parameters are valid """
+
+        self.test = test
 
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
@@ -502,6 +515,8 @@ class BCP0050301Test(GenericTest):
         """ Check that senders transport parameters having 'ext_privacy' parameters are properly validated
             on activation against constraints """
 
+        self.test = test
+
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
 
@@ -735,6 +750,8 @@ class BCP0050301Test(GenericTest):
     def test_04(self, test):
         """ Check that receivers transport parameters having 'ext_privacy' parameters are valid """
 
+        self.test = test
+
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
 
@@ -902,7 +919,7 @@ class BCP0050301Test(GenericTest):
                             if ("urn:x-nmos:cap:meta:enabled" in constraint_set and
                                     not constraint_set["urn:x-nmos:cap:meta:enabled"]):
                                 continue
-                    
+
                             if has_key(constraint_set, privacy_capability):
                                 capability = get_key_value(constraint_set, privacy_capability)
                                 if "enum" in capability:
@@ -988,6 +1005,8 @@ class BCP0050301Test(GenericTest):
     def test_05(self, test):
         """ Check that receiver transport parameters having 'ext_privacy' parameters are properly validated
             on activation against constraints """
+
+        self.test = test
 
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
@@ -1224,6 +1243,8 @@ class BCP0050301Test(GenericTest):
         """ Check that senders ECDH private/public key is regenerated on an activation
             with master_enable set to false """
 
+        self.test = test
+
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
 
@@ -1429,6 +1450,8 @@ class BCP0050301Test(GenericTest):
     def test_07(self, test):
         """ Check that receivers ECDH private/public key is regenerated on an activation
             with master_enable set to false """
+
+        self.test = test
 
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
@@ -1663,6 +1686,8 @@ class BCP0050301Test(GenericTest):
     def test_08(self, test):
         """Check PEP Senders"""
 
+        self.test = test
+
         api = self.apis[SENDER_CAPS_KEY]
 
         reg_api = self.apis["caps-register"]
@@ -1859,6 +1884,8 @@ class BCP0050301Test(GenericTest):
     def test_09(self, test):
         """Check PEP Receivers"""
 
+        self.test = test
+
         api = self.apis[RECEIVER_CAPS_KEY]
 
         reg_api = self.apis["caps-register"]
@@ -1961,6 +1988,8 @@ class BCP0050301Test(GenericTest):
     def test_10(self, test):
         """ Check that senders ECDH private/public key is NOT regenerated on an activation
             with master_enable set to true """
+
+        self.test = test
 
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
@@ -2084,7 +2113,7 @@ class BCP0050301Test(GenericTest):
 
                     if not active["master_enable"]:
                         return test.UNCLEAR("sender {} : testing ECDH private/public keys pair without regeneration"
-                                             " require active senders".format(sender["id"]))
+                                            " require active senders".format(sender["id"]))
 
                     # REFERENCE: During an activation (`master_enable` becomes true) or re-activation (`master_enable`
                     #            remains true), a Sender MAY change all privacy encryption parameters, but the Sender's
@@ -2162,6 +2191,8 @@ class BCP0050301Test(GenericTest):
     def test_11(self, test):
         """ Check that receivers ECDH private/public key is NOT regenerated on an activation
             with master_enable set to true """
+
+        self.test = test
 
         reg_api = self.apis["ext-transport-parameters-register"]
         reg_path = reg_api["spec_path"] + "/transport-parameters"
@@ -2281,7 +2312,7 @@ class BCP0050301Test(GenericTest):
 
                     if not active["master_enable"]:
                         return test.UNCLEAR("receiver {} : testing ECDH private/public keys pair without regeneration"
-                                             " require active receivers".format(receiver["id"]))
+                                            " require active receivers".format(receiver["id"]))
 
                     # REFERENCE: During an activation (`master_enable` becomes `true`) or re-activation (`master_enable`
                     #            remains true), a Receiver MAY change all privacy encryption parameters, but the

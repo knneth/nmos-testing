@@ -32,6 +32,12 @@ from ..GenericTest import GenericTest, NMOSTestException, NMOS_WIKI_URL
 from ..IS04Utils import IS04Utils
 from ..TestHelper import get_default_ip, is_ip_address, load_resolved_schema, check_content_type
 
+# IPMX Note: for IS-04 tests we do not attempt to isolate the senders and receivers to only those
+#            selected on the command line. We assume that the testing of all the resource is ok
+#            unless there is a requirement to have active/inactive senders snd receivers in which
+#            case we will apply the filter.
+from ..IPMXUtils import filter_resources
+
 NODE_API_KEY = "node"
 RECEIVER_CAPS_KEY = "receiver-caps"
 CAPS_REGISTER_KEY = "caps-register"
@@ -1411,7 +1417,7 @@ class IS0401Test(GenericTest):
         try:
             access_error = False
             content_type_warn = None
-            node_senders = response.json()
+            node_senders = filter_resources(response.json(), "senders")
             for sender in node_senders:
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
                     continue

@@ -25,6 +25,7 @@ from ..GenericTest import GenericTest, NMOSTestException
 from ..IS05Utils import IS05Utils
 from .. import Config as CONFIG
 from ..TestHelper import compare_json, get_default_ip
+from ..IPMXUtils import filter_resources
 
 NODE_API_KEY = "node"
 CONN_API_KEY = "connection"
@@ -60,7 +61,7 @@ class IS0502Test(GenericTest):
             return False, "Node API did not respond as expected: {}".format(resources)
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type].append(resource)
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:
@@ -89,7 +90,7 @@ class IS0502Test(GenericTest):
             return False, "Connection API did not respond as expected: {}".format(resources)
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONN_API_KEY]["version"], "v1.1") >= 0:

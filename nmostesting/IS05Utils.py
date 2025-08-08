@@ -21,6 +21,7 @@ from random import randint
 from . import TestHelper
 from .NMOSUtils import NMOSUtils
 from . import Config as CONFIG
+from .IPMXUtils import filter_resources
 
 IMMEDIATE_ACTIVATION = 'activate_immediate'
 SCHEDULED_ABSOLUTE_ACTIVATION = 'activate_scheduled_absolute'
@@ -579,6 +580,18 @@ class IS05Utils(NMOSUtils):
                     toReturn.append(value[:-1])
             except ValueError:
                 pass
+        return filter_resources(toReturn, "senders")
+
+    def get_reference_senders(self):
+        """Gets a list of the available reference senders on the API"""
+        toReturn = []
+        valid, r = TestHelper.do_request("GET", self.url + "single/senders/")
+        if valid and r.status_code == 200:
+            try:
+                for value in r.json():
+                    toReturn.append(value[:-1])
+            except ValueError:
+                pass
         return toReturn
 
     def get_receivers(self):
@@ -591,7 +604,7 @@ class IS05Utils(NMOSUtils):
                     toReturn.append(value[:-1])
             except ValueError:
                 pass
-        return toReturn
+        return filter_resources(toReturn, "receivers")
 
     def get_transporttype(self, port, portType):
         """Get the transport type for a given Sender or Receiver"""

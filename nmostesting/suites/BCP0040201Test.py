@@ -26,6 +26,7 @@ from ..IS05Utils import IS05Utils
 from ..TestHelper import load_resolved_schema
 from ..TestHelper import check_content_type
 from ..TestResult import Test
+from ..IPMXUtils import filter_resources
 
 from pathlib import Path
 
@@ -93,7 +94,7 @@ class BCP0040201Test(GenericTest):
             raise NMOSTestException(self.test.FAIL(message))
 
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 self.is04_resources[resource_type][resource["id"]] = resource
             self.is04_resources["_requested"].append(resource_type)
         except json.JSONDecodeError:
@@ -124,7 +125,7 @@ class BCP0040201Test(GenericTest):
         # which is good for allowing extended transport. The transporttype-response-schema.json schema is
         # broken as it does not allow additional transport, nor x-nmos ones, nor vendor specific ones.
         try:
-            for resource in resources.json():
+            for resource in filter_resources(resources.json(), resource_type):
                 resource_id = resource.rstrip("/")
                 self.is05_resources[resource_type].append(resource_id)
                 if self.is05_utils.compare_api_version(self.apis[CONNECTION_API_KEY]["version"], "v1.1") >= 0:

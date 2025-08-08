@@ -18,6 +18,8 @@ from .IS04Utils import IS04Utils
 from .IS05Utils import IS05Utils
 from .NMOSUtils import NMOSUtils
 from .GenericTest import GenericTest
+from .IPMXUtils import filter_resources
+
 NODE_API_KEY = "node"
 CONN_API_KEY = "connection"
 
@@ -48,7 +50,7 @@ class IS11Utils(NMOSUtils, GenericTest):
                     toReturn.append(value[:-1])
             except ValueError:
                 pass
-        return toReturn
+        return filter_resources(toReturn, "senders")
 
     # TODO: Remove the duplication (IS05Utils)
     def get_receivers(self):
@@ -61,7 +63,7 @@ class IS11Utils(NMOSUtils, GenericTest):
                     toReturn.append(value[:-1])
             except ValueError:
                 pass
-        return toReturn
+        return filter_resources(toReturn, "receivers")
 
     # TODO: Remove the duplication (IS05Utils)
     def get_inputs(self):
