@@ -443,9 +443,9 @@ SPECIFICATIONS = {
     "nmos-parameter-registers": {
         "repo": "nmos-parameter-registers",
         "url": "https://github.com/alabou/",
-        "branch": "bcp-007-02",
-        "versions": ["bcp-007-02"],
-        "default_version": "bcp-007-02",
+        "branch": "testing-1212",
+        "versions": ["testing-1212"],
+        "default_version": "testing-1212",
         "apis": {
             "caps-register": {
                 "name": "Capabilities Register"
