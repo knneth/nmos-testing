@@ -93,6 +93,7 @@ from .suites import BCP0060101Test
 from .suites import BCP0060102Test
 from .suites import BCP0050201Test
 from .suites import BCP00604Test
+from .suites import BCP0070201Test
 from .suites import BCP0050301Test
 from .suites import BCP0080101Test
 from .suites import BCP0080201Test
@@ -570,6 +571,30 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP00604Test.BCP00604Test
     },
+    "BCP-007-02-01": {
+        "name": "BCP-007-02 NMOS With IPMX/USB",
+        "specs": [{
+            "spec_key": "is-04",
+            "api_key": "node"
+        }, {
+            "spec_key": "is-05",
+            "api_key": "connection"
+        }],
+        "extra_specs": [{
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "flow-register"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "sender-register"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "source-register"
+        }, {
+            "spec_key": "bcp-007-02",
+            "api_key": "usb-transport"
+        }],
+        "class": BCP0070201Test.BCP0070201Test
+    },
     "BCP-005-03-01": {
         "name": "BCP-005-03 NMOS With IPMX/PEP",
         "specs": [{
@@ -1010,9 +1035,25 @@ def init_spec_cache():
         if repo_data["repo"] is None:
             continue
         if not os.path.exists(path):
-            repo_url = repo_data.get("url", "https://github.com/AMWA-TV/")
-            print(" * Initialising repository '{}' at url '{}'".format(repo_data["repo"], repo_url))
+
+            if "url" not in repo_data or repo_data["url"] is None:
+                repo_url = 'https://github.com/AMWA-TV/'
+            else:
+                repo_url = repo_data["url"]
+            if "branch" not in repo_data or repo_data["branch"] is None:
+                repo_branch = None
+            else:
+                repo_branch = repo_data["branch"]
+
+            print(" * Initialising repository '{}' from branch '{}' at url '{}'".format(
+                repo_data["repo"], repo_branch, repo_url))
+
             repo = git.Repo.clone_from(repo_url + repo_data["repo"] + '.git', path)
+
+            if repo_branch is not None:
+                repo.git.checkout(repo_branch)
+                print(repo.git.status())
+
             update_last_pull = True
         else:
             repo = git.Repo(path)

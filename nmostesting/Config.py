@@ -428,6 +428,18 @@ SPECIFICATIONS = {
         "default_version": "v1.0",
         "apis": {}
     },
+    "bcp-007-02": {
+        "repo": "proposal_bcp-007-02",
+        "url": "https://github.com/alabou/",
+        "branch": "main",
+        "versions": ["main"],
+        "default_version": "main",
+        "apis": {
+            "usb-transport": {
+                "name": "USB Transport Parameters Schemas"
+            }
+        }
+    },
     "nmos-parameter-registers": {
         "repo": "nmos-parameter-registers",
         "url": "https://github.com/alabou/",
@@ -437,6 +449,9 @@ SPECIFICATIONS = {
         "apis": {
             "caps-register": {
                 "name": "Capabilities Register"
+            },
+            "source-register": {
+                "name": "Source Attributes Register"
             },
             "flow-register": {
                 "name": "Flow Attributes Register"
