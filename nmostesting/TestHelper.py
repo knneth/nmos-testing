@@ -182,10 +182,10 @@ def get_default_ip():
             raise KeyError(f"No IPv4 address found for interface {preferred_interface}")
         except KeyError:
             raise ValueError(f"Interface {preferred_interface} not found")
-    
+
     # Get all network interfaces and their addresses
     interfaces = psutil.net_if_addrs()
-    
+
     # Try to find the interface with the default gateway (approximation)
     stats = psutil.net_if_stats()
     for iface, addrs in interfaces.items():
@@ -195,10 +195,11 @@ def get_default_ip():
         for addr in addrs:
             if addr.family == socket.AF_INET and addr.address != '127.0.0.1':
                 return addr.address
-    
+
     # Fallback to localhost if no suitable interface is found
     return '127.0.0.1'
-   
+
+
 def get_mocks_hostname():
     return "mocks." + CONFIG.DNS_DOMAIN if CONFIG.DNS_SD_MODE == "unicast" else "nmos-mocks.local"
 

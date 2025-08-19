@@ -91,6 +91,8 @@ from .suites import BCP00301Test
 from .suites import BCP0050101Test
 from .suites import BCP0060101Test
 from .suites import BCP0060102Test
+from .suites import BCP0060201Test
+from .suites import BCP0060301Test
 from .suites import BCP0050201Test
 from .suites import BCP00604Test
 from .suites import BCP0070201Test
@@ -750,6 +752,36 @@ TEST_DEFINITIONS = {
             "api_key": "receiver-caps"
         }],
         "class": MatroxSdpTest.MatroxSdpTest
+    },
+    "BCP-006-02-01": {
+        "name": "BCP-006-02 NMOS With H.264",
+        "specs": [{
+            "spec_key": "is-04",
+            "api_key": "node"
+        }],
+        "extra_specs": [{
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "flow-register"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "sender-register"
+        }],
+        "class": BCP0060201Test.BCP0060201Test
+    },
+    "BCP-006-03-01": {
+        "name": "BCP-006-03 NMOS With H.265",
+        "specs": [{
+            "spec_key": "is-04",
+            "api_key": "node"
+        }],
+        "extra_specs": [{
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "flow-register"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "sender-register"
+        }],
+        "class": BCP0060301Test.BCP0060301Test
     },
 }
 
