@@ -77,8 +77,8 @@ TESTING_FACADE_PORT = 5001
 
 # Path to store the specification file cache in. Relative to the base of the testing repository.
 CACHE_PATH = 'cache'
-CACHE_IS_READ_ONLY = True
-# CACHE_IS_READ_ONLY = False
+# CACHE_IS_READ_ONLY = True
+CACHE_IS_READ_ONLY = False
 
 # Timeout for any HTTP requests
 HTTP_TIMEOUT = 3

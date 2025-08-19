@@ -33,25 +33,25 @@ auto test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_09 test_12 tes
 
 EXAMPLE: python3 nmos-test.py suite IS-05-02 --tests auto test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_09 test_12 test_13 test_14 test_15 test_16 test_17 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
-BCP-004-01-01:
+BCP-004-01-01 (Receiver Capabilities):
 
 auto test_01 test_2
 
 EXAMPLE: python3 nmos-test.py suite BCP-004-01-01 --tests auto test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
-BCP-004-02-01:
+BCP-004-02-01 (Sender Capabilities):
 
 auto test_01 test_2
 
 EXAMPLE: python3 nmos-test.py suite BCP-004-02-01 --tests auto test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
-BCP-005-02-01:
+BCP-005-02-01 (HKEP):
 
 auto test_01 test_02 test_03
 
 EXAMPLE: python3 nmos-test.py suite BCP-005-02-01 --tests auto test_01 test_02 test_03  --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
-BCP-005-03-01:
+BCP-005-03-01 (PEP):
 
 auto test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_09 test_10 test_11
 
@@ -71,8 +71,26 @@ test_02 test_03 test_04
 
 EXAMPLE: python3 nmos-test.py suite Matrox-Sdp --tests test_02 test_03 test_04 --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 8443 5010 5010 --version v1.3 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
-BCP-006-01-01:
+BCP-006-01-01 (JPEG-XS):
 
 all
 
 EXAMPLE: python3 nmos-test.py suite BCP-006-01-01 --tests all  --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+
+BCP-006-02-01 (H.264):
+
+all
+
+EXAMPLE: python3 nmos-test.py suite BCP-006-02-01 --tests all  --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+
+BCP-006-03-01 (H.265):
+
+all
+
+EXAMPLE: python3 nmos-test.py suite BCP-006-03-01 --tests all  --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+
+BCP-007-02-01 (USB):
+
+all
+
+EXAMPLE: python3 nmos-test.py suite BCP-007-02-01 --tests all  --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
