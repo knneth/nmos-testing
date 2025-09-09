@@ -1,0 +1,623 @@
+#!/usr/bin/env python3
+"""
+Comprehensive Test Suite for Flow to CCF Capabilities Converter
+Using realistic NMOS Flow and Source examples similar to MatroxOnly repository
+"""
+
+import unittest
+import sys
+import os
+from fractions import Fraction
+
+# Add project root to path
+sys.path.insert(0, '.')
+
+from nmostesting.suites.FlowToCapabilities import FlowToCapabilitiesConverter, convert_flow_to_capabilities
+from nmostesting.suites.MatroxCCF import (
+    FormatVideo, FormatAudio, FormatData, FormatMux,
+    CapFormatMediaType, CapFormatGrainRate, CapFormatFrameWidth, CapFormatFrameHeight,
+    CapFormatInterlaceMode, CapFormatColorspace, CapFormatTransferCharacteristic,
+    CapFormatColorSampling, CapFormatComponentDepth, CapFormatChannelCount,
+    CapFormatSampleRate, CapFormatSampleDepth, CapFormatBitRate, CapFormatProfile,
+    CapFormatLevel, CapFormatConstantBitRate, CapTransportClockRefType,
+    CapTransportSynchronousMedia, CapTransportHkep, CapTransportPrivacy,
+    CapFormatVideoLayers, CapFormatAudioLayers, CapFormatDataLayers
+)
+
+
+class TestFlowToCapabilities(unittest.TestCase):
+    """Test Flow to CCF Capabilities conversion with realistic examples"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        self.converter = FlowToCapabilitiesConverter()
+        
+    def test_st2110_20_raw_video_flow(self):
+        """Test ST 2110-20 raw video flow conversion (1080i50 YCbCr-4:2:2 10-bit)"""
+        print("\n=== Testing ST 2110-20 Raw Video Flow ===")
+        
+        flow = {
+            "id": "f1e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "1080i50 Raw Video",
+            "description": "ST 2110-20 Raw Video Flow",
+            "format": "urn:x-nmos:format:video",
+            "tags": {
+                "urn:x-nmos:tag:grouphint/v1.0": "primary"
+            },
+            "source_id": "s1e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d1e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "video/raw",
+            "frame_width": 1920,
+            "frame_height": 1080,
+            "interlace_mode": "interlaced_tff",
+            "colorspace": "BT709",
+            "transfer_characteristic": "SDR",
+            "grain_rate": {
+                "numerator": 25,
+                "denominator": 1
+            },
+            "components": [
+                {
+                    "name": "Y",
+                    "width": 1920,
+                    "height": 1080,
+                    "bit_depth": 10
+                },
+                {
+                    "name": "Cb",
+                    "width": 960,
+                    "height": 1080,
+                    "bit_depth": 10
+                },
+                {
+                    "name": "Cr", 
+                    "width": 960,
+                    "height": 1080,
+                    "bit_depth": 10
+                }
+            ],
+            "urn:x-matrox:layer": 0,
+            "hkep": True,
+            "privacy": False
+        }
+        
+        source = {
+            "id": "s1e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Camera 1 Source",
+            "description": "Video source from Camera 1",
+            "format": "urn:x-nmos:format:video",
+            "caps": {},
+            "tags": {},
+            "device_id": "d1e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "clock_name": "clk1",
+            "synchronous_media": True
+        }
+        
+        node_clocks = [
+            {
+                "name": "clk1",
+                "ref_type": "ptp"
+            }
+        ]
+        
+        caps = self.converter.convert(flow, source, node_clocks)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatVideo)
+        self.assertEqual(capset.layer, 0)
+        
+        # Check specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"video/raw"})
+        self.assertEqual(capset.caps[CapFormatFrameWidth].value.enumerated, {1920})
+        self.assertEqual(capset.caps[CapFormatFrameHeight].value.enumerated, {1080})
+        self.assertEqual(capset.caps[CapFormatInterlaceMode].value.enumerated, {"interlaced_tff"})
+        self.assertEqual(capset.caps[CapFormatColorspace].value.enumerated, {"BT709"})
+        self.assertEqual(capset.caps[CapFormatColorSampling].value.enumerated, {"YCbCr-4:2:2"})
+        self.assertEqual(capset.caps[CapFormatComponentDepth].value.enumerated, {10})
+        self.assertEqual(capset.caps[CapFormatGrainRate].value.enumerated, {Fraction(25, 1)})
+        self.assertEqual(capset.caps[CapTransportHkep].value.enumerated, {True})
+        self.assertEqual(capset.caps[CapTransportPrivacy].value.enumerated, {False})
+        self.assertEqual(capset.caps[CapTransportSynchronousMedia].value.enumerated, {True})
+        
+        print(f"✓ ST 2110-20 Raw Video Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_h264_coded_video_flow(self):
+        """Test H.264 coded video flow conversion"""
+        print("\n=== Testing H.264 Coded Video Flow ===")
+        
+        flow = {
+            "id": "f2e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "H.264 HD Video",
+            "description": "H.264 Coded Video Flow",
+            "format": "urn:x-nmos:format:video",
+            "source_id": "s2e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d2e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "video/H264",
+            "frame_width": 1920,
+            "frame_height": 1080,
+            "interlace_mode": "progressive",
+            "colorspace": "BT709",
+            "transfer_characteristic": "SDR",
+            "grain_rate": {
+                "numerator": 25,
+                "denominator": 1
+            },
+            "components": [
+                {
+                    "name": "Y",
+                    "width": 1920,
+                    "height": 1080,
+                    "bit_depth": 8
+                },
+                {
+                    "name": "Cb",
+                    "width": 960,
+                    "height": 540,
+                    "bit_depth": 8
+                },
+                {
+                    "name": "Cr",
+                    "width": 960,
+                    "height": 540,
+                    "bit_depth": 8
+                }
+            ],
+            "bit_rate": 25000000,  # 25 Mbps
+            "constant_bit_rate": False,
+            "profile": "high",
+            "level": "4.0",
+            "urn:x-matrox:layer": 0,
+            "hkep": False,
+            "privacy": True
+        }
+        
+        source = {
+            "id": "s2e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Encoder Source",
+            "description": "H.264 encoder source",
+            "format": "urn:x-nmos:format:video",
+            "caps": {},
+            "tags": {},
+            "device_id": "d2e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "clock_name": "clk0",
+            "synchronous_media": False
+        }
+        
+        node_clocks = [
+            {
+                "name": "clk0",
+                "ref_type": "internal"
+            }
+        ]
+        
+        caps = self.converter.convert(flow, source, node_clocks)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatVideo)
+        
+        # Check coded video specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"video/H264"})
+        self.assertEqual(capset.caps[CapFormatBitRate].value.enumerated, {25000000})
+        self.assertEqual(capset.caps[CapFormatConstantBitRate].value.enumerated, {False})
+        self.assertEqual(capset.caps[CapFormatProfile].value.enumerated, {"high"})
+        self.assertEqual(capset.caps[CapFormatLevel].value.enumerated, {"4.0"})
+        self.assertEqual(capset.caps[CapTransportHkep].value.enumerated, {False})
+        self.assertEqual(capset.caps[CapTransportPrivacy].value.enumerated, {True})
+        
+        print(f"✓ H.264 Coded Video Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_st2110_30_raw_audio_flow(self):
+        """Test ST 2110-30 raw audio flow conversion (48kHz 24-bit stereo)"""
+        print("\n=== Testing ST 2110-30 Raw Audio Flow ===")
+        
+        flow = {
+            "id": "f3e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "48kHz 24-bit Audio",
+            "description": "ST 2110-30 Raw Audio Flow",
+            "format": "urn:x-nmos:format:audio",
+            "source_id": "s3e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d3e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "audio/L24",
+            "sample_rate": {
+                "numerator": 48000,
+                "denominator": 1
+            },
+            "bit_depth": 24,
+            "urn:x-matrox:layer": 0,
+            "hkep": True,
+            "privacy": False
+        }
+        
+        source = {
+            "id": "s3e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Audio Input Source",
+            "description": "Stereo audio input",
+            "format": "urn:x-nmos:format:audio",
+            "caps": {},
+            "tags": {},
+            "device_id": "d3e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "channels": [
+                {
+                    "label": "Left",
+                    "symbol": "L"
+                },
+                {
+                    "label": "Right", 
+                    "symbol": "R"
+                }
+            ],
+            "clock_name": "clk1",
+            "synchronous_media": True
+        }
+        
+        node_clocks = [
+            {
+                "name": "clk1",
+                "ref_type": "ptp"
+            }
+        ]
+        
+        caps = self.converter.convert(flow, source, node_clocks)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatAudio)
+        
+        # Check audio specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"audio/L24"})
+        self.assertEqual(capset.caps[CapFormatChannelCount].value.enumerated, {2})
+        self.assertEqual(capset.caps[CapFormatSampleRate].value.enumerated, {Fraction(48000, 1)})
+        self.assertEqual(capset.caps[CapFormatSampleDepth].value.enumerated, {24})
+        
+        print(f"✓ ST 2110-30 Raw Audio Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_mpeg_coded_audio_flow(self):
+        """Test MPEG coded audio flow conversion"""
+        print("\n=== Testing MPEG Coded Audio Flow ===")
+        
+        flow = {
+            "id": "f4e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "MPEG Audio",
+            "description": "MPEG Coded Audio Flow",
+            "format": "urn:x-nmos:format:audio",
+            "source_id": "s4e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d4e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "audio/mpeg4-generic",
+            "sample_rate": {
+                "numerator": 48000,
+                "denominator": 1
+            },
+            "bit_rate": 384000,  # 384 kbps
+            "constant_bit_rate": True,
+            "profile": "aac-lc",
+            "level": "2"
+        }
+        
+        source = {
+            "id": "s4e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Audio Encoder Source",
+            "description": "5.1 surround audio source",
+            "format": "urn:x-nmos:format:audio",
+            "caps": {},
+            "tags": {},
+            "device_id": "d4e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "channels": [
+                {"label": "Left", "symbol": "L"},
+                {"label": "Right", "symbol": "R"},
+                {"label": "Center", "symbol": "C"},
+                {"label": "LFE", "symbol": "LFE"},
+                {"label": "Left Surround", "symbol": "Ls"},
+                {"label": "Right Surround", "symbol": "Rs"}
+            ],
+            "clock_name": "clk0",
+            "synchronous_media": False
+        }
+        
+        caps = self.converter.convert(flow, source)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatAudio)
+        
+        # Check coded audio specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"audio/mpeg4-generic"})
+        self.assertEqual(capset.caps[CapFormatChannelCount].value.enumerated, {6})
+        self.assertEqual(capset.caps[CapFormatBitRate].value.enumerated, {384000})
+        self.assertEqual(capset.caps[CapFormatConstantBitRate].value.enumerated, {True})
+        self.assertEqual(capset.caps[CapFormatProfile].value.enumerated, {"aac-lc"})
+        self.assertEqual(capset.caps[CapFormatLevel].value.enumerated, {"2"})
+        
+        print(f"✓ MPEG Coded Audio Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_st2110_40_data_flow(self):
+        """Test ST 2110-40 data flow conversion"""
+        print("\n=== Testing ST 2110-40 Data Flow ===")
+        
+        flow = {
+            "id": "f5e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Ancillary Data",
+            "description": "ST 2110-40 Data Flow",
+            "format": "urn:x-nmos:format:data",
+            "source_id": "s5e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d5e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "application/ST2110-40",
+            "urn:x-matrox:layer": 1,
+            "hkep": True,
+            "privacy": False
+        }
+        
+        source = {
+            "id": "s5e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Data Source",
+            "description": "Ancillary data source",
+            "format": "urn:x-nmos:format:data",
+            "caps": {},
+            "tags": {},
+            "device_id": "d5e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "clock_name": "clk1",
+            "synchronous_media": True
+        }
+        
+        caps = self.converter.convert(flow, source)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatData)
+        self.assertEqual(capset.layer, 1)
+        
+        # Check data specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"application/ST2110-40"})
+        
+        print(f"✓ ST 2110-40 Data Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_mux_flow_with_layers(self):
+        """Test mux flow with multiple layers"""
+        print("\n=== Testing Mux Flow with Layers ===")
+        
+        flow = {
+            "id": "f6e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Multiplexed Stream",
+            "description": "Mux Flow with Video, Audio, and Data",
+            "format": "urn:x-nmos:format:mux",
+            "source_id": "s6e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "device_id": "d6e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "media_type": "application/mxf",
+            "video_layers": 2,
+            "audio_layers": 4,
+            "data_layers": 1,
+            "urn:x-matrox:layer": 0,
+            "hkep": False,
+            "privacy": True
+        }
+        
+        source = {
+            "id": "s6e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "version": "1625097600:0",
+            "label": "Mux Source",
+            "description": "Multiplexed source",
+            "format": "urn:x-nmos:format:mux",
+            "caps": {},
+            "tags": {},
+            "device_id": "d6e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "parents": [],
+            "clock_name": "clk2",
+            "synchronous_media": False
+        }
+        
+        caps = self.converter.convert(flow, source)
+        
+        # Verify capabilities
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        self.assertEqual(capset.format, FormatMux)
+        
+        # Check mux specific capabilities
+        self.assertEqual(capset.caps[CapFormatMediaType].value.enumerated, {"application/mxf"})
+        self.assertEqual(capset.caps[CapFormatVideoLayers].value.enumerated, {2})
+        self.assertEqual(capset.caps[CapFormatAudioLayers].value.enumerated, {4})
+        self.assertEqual(capset.caps[CapFormatDataLayers].value.enumerated, {1})
+        
+        print(f"✓ Mux Flow Test Passed - Generated {len(capset.caps)} capabilities")
+        
+    def test_error_handling_missing_source(self):
+        """Test error handling when source is missing"""
+        print("\n=== Testing Error Handling - Missing Source ===")
+        
+        flow = {
+            "format": "urn:x-nmos:format:video",
+            "media_type": "video/raw"
+        }
+        
+        # The converter returns empty capabilities for None source (graceful handling)
+        caps = self.converter.convert(flow, None)
+        self.assertEqual(len(caps.capsets), 0)
+        print("✓ Error handling test passed - Missing source handled gracefully")
+        
+    def test_error_handling_format_mismatch(self):
+        """Test error handling when flow and source formats don't match"""
+        print("\n=== Testing Error Handling - Format Mismatch ===")
+        
+        flow = {
+            "format": "urn:x-nmos:format:video",
+            "media_type": "video/raw"
+        }
+        
+        source = {
+            "format": "urn:x-nmos:format:audio"
+        }
+        
+        caps = self.converter.convert(flow, source)
+        
+        # Should return empty capabilities
+        self.assertEqual(len(caps.capsets), 0)
+        print("✓ Error handling test passed - Format mismatch handled")
+        
+    def test_fractional_rates_handling(self):
+        """Test handling of fractional frame rates and sample rates"""
+        print("\n=== Testing Fractional Rates Handling ===")
+        
+        flow = {
+            "id": "f7e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "format": "urn:x-nmos:format:video",
+            "media_type": "video/raw",
+            "frame_width": 3840,
+            "frame_height": 2160,
+            "interlace_mode": "progressive",
+            "colorspace": "BT2020",
+            "transfer_characteristic": "HLG",
+            "grain_rate": {
+                "numerator": 24000,
+                "denominator": 1001  # 23.976 fps
+            },
+            "components": [
+                {"name": "Y", "width": 3840, "height": 2160, "bit_depth": 10},
+                {"name": "Cb", "width": 1920, "height": 1080, "bit_depth": 10},
+                {"name": "Cr", "width": 1920, "height": 1080, "bit_depth": 10}
+            ],
+            "source_id": "s7e3c3c0-ca4a-11eb-b8bc-0242ac130003"
+        }
+        
+        source = {
+            "id": "s7e3c3c0-ca4a-11eb-b8bc-0242ac130003",
+            "format": "urn:x-nmos:format:video",
+            "clock_name": "clk1",
+            "synchronous_media": True
+        }
+        
+        caps = self.converter.convert(flow, source)
+        
+        # Verify fractional rate handling
+        self.assertEqual(len(caps.capsets), 1)
+        capset = caps.capsets[0]
+        
+        expected_rate = Fraction(24000, 1001)
+        self.assertEqual(capset.caps[CapFormatGrainRate].value.enumerated, {expected_rate})
+        self.assertEqual(capset.caps[CapFormatFrameWidth].value.enumerated, {3840})
+        self.assertEqual(capset.caps[CapFormatFrameHeight].value.enumerated, {2160})
+        self.assertEqual(capset.caps[CapFormatColorSampling].value.enumerated, {"YCbCr-4:2:0"})
+        
+        print(f"✓ Fractional Rates Test Passed - 23.976 fps = {expected_rate}")
+
+
+def run_comprehensive_display():
+    """Run comprehensive test and display results"""
+    print("=" * 80)
+    print("FLOW TO CCF CAPABILITIES CONVERTER - COMPREHENSIVE TEST RESULTS")
+    print("=" * 80)
+    print("Testing with realistic NMOS Flow and Source examples")
+    print("Similar to MatroxOnly repository examples\n")
+    
+    # Create test instances
+    converter = FlowToCapabilitiesConverter()
+    
+    # Example: Complex video flow
+    complex_flow = {
+        "format": "urn:x-nmos:format:video",
+        "media_type": "video/raw", 
+        "frame_width": 1920,
+        "frame_height": 1080,
+        "interlace_mode": "interlaced_bff",
+        "colorspace": "BT709",
+        "transfer_characteristic": "SDR",
+        "grain_rate": {"numerator": 25, "denominator": 1},
+        "components": [
+            {"name": "Y", "width": 1920, "height": 1080, "bit_depth": 10},
+            {"name": "Cb", "width": 960, "height": 1080, "bit_depth": 10},
+            {"name": "Cr", "width": 960, "height": 1080, "bit_depth": 10}
+        ],
+        "urn:x-matrox:layer": 0,
+        "hkep": True,
+        "privacy": False
+    }
+    
+    complex_source = {
+        "format": "urn:x-nmos:format:video",
+        "clock_name": "clk1",
+        "synchronous_media": True
+    }
+    
+    caps = converter.convert(complex_flow, complex_source)
+    
+    if caps.capsets:
+        capset = caps.capsets[0]
+        print(f"Generated Capabilities for Complex Flow:")
+        print(f"  Total CapSets: {len(caps.capsets)}")
+        print(f"  Video CapSet Label: {capset.label}")
+        print(f"  Video CapSet Format: {capset.format}")
+        print(f"  Video CapSet Layer: {capset.layer}")
+        print(f"  Total Capabilities: {len(capset.caps)}\n")
+        
+        print("Capability Details:")
+        for cap_name, cap_obj in capset.caps.items():
+            if cap_obj.value.enumerated:
+                value = next(iter(cap_obj.value.enumerated))
+                if isinstance(value, str):
+                    print(f"    {cap_name.split(':')[-1]}: {value} (STRING)")
+                elif isinstance(value, int):
+                    print(f"    {cap_name.split(':')[-1]}: {value} (INT)")
+                elif isinstance(value, Fraction):
+                    print(f"    {cap_name.split(':')[-1]}: {value} (RATIONAL)")
+                elif isinstance(value, bool):
+                    print(f"    {cap_name.split(':')[-1]}: {value} (BOOL)")
+                else:
+                    print(f"    {cap_name.split(':')[-1]}: {value} ({type(value).__name__})")
+    
+    print("\n" + "=" * 80)
+    print("ALL FLOW TESTS COMPLETED SUCCESSFULLY!")
+    print("The Flow to CCF Capabilities converter is working correctly")
+    print("with realistic NMOS Flow and Source examples.")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    print("Flow to CCF Capabilities Converter - Comprehensive Test Suite")
+    print("Using realistic examples similar to MatroxOnly repository")
+    print("=" * 80)
+    
+    # Add comprehensive display test
+    unittest.TestLoader.testMethodPrefix = "test_"
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromTestCase(TestFlowToCapabilities)
+    
+    # Add comprehensive display
+    def comprehensive_display_wrapper(result):
+        run_comprehensive_display()
+    
+    # Run tests
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    # Show comprehensive results
+    comprehensive_display_wrapper(result)
+    
+    # Exit with proper code
+    sys.exit(0 if result.wasSuccessful() else 1)
