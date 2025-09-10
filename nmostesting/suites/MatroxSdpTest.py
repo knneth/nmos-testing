@@ -69,6 +69,20 @@ from .MatroxSdpCheck import check_sdp_rfc3551
 from .MatroxSdpCheck import check_sdp_st2110_30
 from .MatroxSdpCheck import check_sdp_st2110_31
 
+# Import SDP to CCF capabilities converter
+from .SdpToCapabilities import convert_sdp_string_to_capabilities, SdpToCapabilitiesConverter
+# Import Flow to CCF capabilities converter
+from .FlowToCapabilities import FlowToCapabilitiesConverter
+from .MatroxCCF import (
+    FormatVideo, FormatAudio, FormatData, FormatMux,
+    CapFormatMediaType, CapFormatGrainRate, CapFormatFrameWidth, CapFormatFrameHeight,
+    CapFormatInterlaceMode, CapFormatColorspace, CapFormatComponentDepth,
+    CapFormatChannelCount, CapFormatSampleRate, CapTransportBitRate,
+    CapFormatVideoLayers, CapMetaFormat, CapMetaLayer,
+    Caps, CapSet, Capability, RangeValue, RangeType, caps_constrict_by_cons, conset_included_in_caps,
+    convert_caps_json_to_caps, capset_included_in_caps
+)
+
 QUERY_API_KEY = "query"
 NODE_API_KEY = "node"
 CONNECTION_API_KEY = "connection"
@@ -988,6 +1002,664 @@ class MatroxSdpTest(GenericTest):
         except Exception as e:
             return test.FAIL("Unexpected error type '{}' and message '{}'".format(type(e).__name__, str(e)))
 
+    def test_05(self, test):
+        """
+        Test that SDP transport files can be converted to CCF capabilities and verified against sender capabilities
+        """
+        self.test = test
+
+        # Initialize the SDP to CCF converter
+        converter = SdpToCapabilitiesConverter()
+
+        for resource_type in ["senders", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+
+        try:
+            # Get all senders - we'll verify capabilities using CCF rather than filtering by format upfront
+            all_senders = list(self.is04_resources["senders"].values())
+            sender_tested = list()
+
+            for sender in all_senders:
+                device = device_map[sender["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # Check the transport => only RTP is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Sender {} transport {} is not RTP"
+                                          .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                          .format(sender["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                sender_tested.append(sender["id"])
+
+                # The sender being active it must provide an SDP transport file and be accessible
+                if "manifest_href" not in sender:
+                    return test.FAIL("Sender {} MUST provide the 'manifest_href' attribute."
+                                          .format(sender["id"]))
+
+                href = sender["manifest_href"]
+                if not href:
+                    return test.FAIL("Sender {} MUST provide a valid 'manifest_href' attribute."
+                                          .format(sender["id"]))
+
+                manifest_href_valid, manifest_href_response = self.do_request("GET", href)
+                if manifest_href_valid and manifest_href_response.status_code == 200:
+                    pass
+                elif manifest_href_valid and manifest_href_response.status_code == 404:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                          .format(sender["id"], href))
+                else:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                          .format(sender["id"], href, manifest_href_response))
+
+                # Convert SDP transport file to CCF capabilities
+                sdp_content = manifest_href_response.text
+
+                try:
+                    sdp_caps = converter.convert_string(sdp_content)
+                except Exception as e:
+                    return test.FAIL("Sender {} SDP transport file conversion to CCF capabilities failed: {}"
+                                          .format(sender["id"], e))
+
+                # Verify we have capability sets
+                if len(sdp_caps.capsets) == 0:
+                    return test.FAIL("Sender {} SDP transport file did not produce any CCF capability sets"
+                                          .format(sender["id"]))
+
+                # Verify that SDP capabilities are compatible with sender capabilities using CCF
+                compatible, error_msg = self._verify_sender_ccf_capability_compatibility(sender, sdp_caps)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
+            if len(sender_tested) == 0:
+                return test.UNCLEAR("No ACTIVE video, audio, or data Senders found on the Node => "
+                                         "PLEASE ACTIVATE A SENDER to TEST")
+
+            return test.PASS("Senders {} have been tested for SDP to CCF capabilities conversion and verification"
+                                  .format(sender_tested))
+
+        except Exception as e:
+            return test.FAIL("Error during test 05: {}".format(e))
+
+    def test_06(self, test):
+        """
+        Test that SDP from receiver active parameters can be converted to CCF capabilities and verified against receiver capabilities
+        """
+        self.test = test
+
+        # Initialize the SDP to CCF converter
+        converter = SdpToCapabilitiesConverter()
+
+        for resource_type in ["receivers", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        # Also get IS-05 receiver resources
+        valid, result = self.get_is05_partial_resources("receivers")
+        if not valid:
+            return test.FAIL(result)
+
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+
+        try:
+            # Get all receivers - we'll verify capabilities using CCF rather than filtering by format upfront
+            all_receivers = list(self.is04_resources["receivers"].values())
+            receiver_tested = list()
+
+            for receiver in all_receivers:
+                device = device_map[receiver["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # Check the transport => only RTP is currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Receiver {} transport {} is not RTP"
+                                          .format(receiver["id"], receiver["transport"]))
+
+                url = "single/receivers/{}/active".format(receiver["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Receiver {} not responding to IS-05 request"
+                                          .format(receiver["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                receiver_tested.append(receiver["id"])
+
+                # The receiver being active should have SDP in the active parameters
+                # For receivers, the SDP is provided via transport_file structure
+                sdp_content = None
+
+                # Try to extract SDP from active parameters with proper error handling
+                try:
+                    transport_file = active["transport_file"]
+                    sdp_content = transport_file["data"] if transport_file["type"] == "application/sdp" else None
+                except (KeyError, TypeError) as e:
+                    return test.FAIL("Receiver {} active parameters have malformed transport_file structure: {}"
+                                          .format(receiver["id"], str(e)))
+
+                if not sdp_content:
+                    return test.FAIL("Receiver {} active parameters do not contain valid SDP"
+                                          .format(receiver["id"]))
+
+                # Ensure SDP is a string
+                if not isinstance(sdp_content, str):
+                    return test.FAIL("Receiver {} SDP is not a string format"
+                                          .format(receiver["id"]))
+
+                # Convert SDP from active parameters to CCF capabilities
+                try:
+                    sdp_caps = converter.convert_string(sdp_content)
+                except Exception as e:
+                    return test.FAIL("Receiver {} SDP active parameters conversion to CCF capabilities failed: {}"
+                                          .format(receiver["id"], e))
+
+                # Verify we have capability sets
+                if len(sdp_caps.capsets) == 0:
+                    return test.FAIL("Receiver {} SDP active parameters did not produce any CCF capability sets"
+                                          .format(receiver["id"]))
+
+                # Verify that SDP capabilities are compatible with receiver capabilities using CCF
+                compatible, error_msg = self._verify_receiver_ccf_capability_compatibility(receiver, sdp_caps)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
+            if len(receiver_tested) == 0:
+                return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
+                                         "PLEASE ACTIVATE A RECEIVER to TEST")
+
+            return test.PASS("Receivers {} have been tested for SDP active parameters to CCF capabilities conversion and verification"
+                                  .format(receiver_tested))
+
+        except Exception as e:
+            return test.FAIL("Error during test 06: {}".format(e))
+
+    def test_07(self, test):
+        """
+        Test that Flow, Source, and Sender information can be converted to CCF capabilities and verified against sender capabilities
+        """
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+        source_map = {source["id"]: source for source in self.is04_resources["sources"].values()}
+
+        try:
+            # Get all senders - we'll verify capabilities using CCF rather than filtering by format upfront
+            all_senders = list(self.is04_resources["senders"].values())
+            sender_tested = list()
+
+            for sender in all_senders:
+                device = device_map[sender["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # Check the transport => only RTP is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Sender {} transport {} is not RTP"
+                                          .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                          .format(sender["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                sender_tested.append(sender["id"])
+
+                # Get the associated flow and source
+                flow_id = sender.get("flow_id")
+                if not flow_id or flow_id not in flow_map:
+                    return test.FAIL("Sender {} has invalid or missing flow_id"
+                                          .format(sender["id"]))
+
+                flow = flow_map[flow_id]
+                source_id = flow.get("source_id")
+                if not source_id or source_id not in source_map:
+                    return test.FAIL("Flow {} has invalid or missing source_id"
+                                          .format(flow_id))
+
+                source = source_map[source_id]
+
+                # Convert Flow, Source, and Sender to CCF capabilities
+                converter = FlowToCapabilitiesConverter()
+                try:
+                    flow_caps = converter.convert(flow, source, sender, node.get("clocks", []))
+                except Exception as e:
+                    return test.FAIL("Sender {} Flow/Source/Sender conversion to CCF capabilities failed: {}"
+                                          .format(sender["id"], e))
+
+                # Verify we have capability sets
+                if len(flow_caps.capsets) == 0:
+                    return test.FAIL("Sender {} Flow/Source/Sender conversion did not produce any CCF capability sets"
+                                          .format(sender["id"]))
+
+                # Verify that Flow capabilities are compatible with sender capabilities using CCF
+                compatible, error_msg = self._verify_sender_ccf_capability_compatibility(sender, flow_caps)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
+            if len(sender_tested) == 0:
+                return test.UNCLEAR("No ACTIVE video, audio, or data Senders found on the Node => "
+                                         "PLEASE ACTIVATE A SENDER to TEST")
+
+            return test.PASS("Senders {} have been tested for Flow/Source/Sender to CCF capabilities conversion and verification"
+                                  .format(sender_tested))
+
+        except Exception as e:
+            return test.FAIL("Error during test 07: {}".format(e))
+
+    def test_08(self, test):
+        """
+        Test that Flow, Source, and Sender capabilities from associated active sender can be converted to CCF capabilities and verified against receiver capabilities
+        """
+        self.test = test
+
+        for resource_type in ["receivers", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        # Also get IS-05 receiver resources
+        valid, result = self.get_is05_partial_resources("receivers")
+        if not valid:
+            return test.FAIL(result)
+
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+
+        try:
+            # Get all receivers - we'll verify capabilities using CCF
+            all_receivers = list(self.is04_resources["receivers"].values())
+            receiver_tested = list()
+
+            for receiver in all_receivers:
+                device = device_map[receiver["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # Check the transport => only RTP is currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Receiver {} transport {} is not RTP"
+                                          .format(receiver["id"], receiver["transport"]))
+
+                url = "single/receivers/{}/active".format(receiver["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Receiver {} not responding to IS-05 request"
+                                          .format(receiver["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                receiver_tested.append(receiver["id"])
+
+                # Get the sender information from the receiver's active parameters
+                sender_id = None
+
+                # Try to extract sender_id from activation parameters
+                try:
+                    if "activation" in active and "sender_id" in active["activation"]:
+                        sender_id = active["activation"]["sender_id"]
+                    else:
+                        return test.FAIL("Receiver {} active parameters do not contain sender_id in activation"
+                                              .format(receiver["id"]))
+                except (KeyError, TypeError) as e:
+                    return test.FAIL("Receiver {} active parameters have malformed activation structure: {}"
+                                          .format(receiver["id"], str(e)))
+
+                if not sender_id:
+                    return test.FAIL("Receiver {} has no associated sender_id"
+                                          .format(receiver["id"]))
+
+                # Get sender information from registry (similar to test_04 approach)
+                sender_data = self._get_sender_from_registry(sender_id)
+                if not sender_data:
+                    return test.FAIL("Receiver {} associated sender {} not found in registry"
+                                          .format(receiver["id"], sender_id))
+
+                # Get flow and source information
+                flow_id = sender_data.get("flow_id")
+                if not flow_id:
+                    return test.FAIL("Receiver {} associated sender {} has no flow_id"
+                                          .format(receiver["id"], sender_id))
+
+                flow_data = self._get_flow_from_registry(flow_id)
+                if not flow_data:
+                    return test.FAIL("Receiver {} flow {} not found in registry"
+                                          .format(receiver["id"], flow_id))
+
+                source_id = flow_data.get("source_id")
+                if not source_id:
+                    return test.FAIL("Receiver {} flow {} has no source_id"
+                                          .format(receiver["id"], flow_id))
+
+                source_data = self._get_source_from_registry(source_id)
+                if not source_data:
+                    return test.FAIL("Receiver {} source {} not found in registry"
+                                          .format(receiver["id"], source_id))
+
+                # Get the sender's node information for FlowToCapabilities
+                sender_node_clocks = None
+                if "device_id" in sender_data:
+                    # First get the device to find the node_id
+                    device_data = self._get_device_from_registry(sender_data["device_id"])
+                    if device_data and "node_id" in device_data:
+                        # Then get the node information
+                        sender_node_data = self._get_node_from_registry(device_data["node_id"])
+                        if sender_node_data and "clocks" in sender_node_data:
+                            sender_node_clocks = sender_node_data["clocks"]
+
+                # Convert Flow, Source, and Sender to CCF capabilities
+                converter = FlowToCapabilitiesConverter()
+                try:
+                    flow_caps = converter.convert(flow_data, source_data, sender_data, sender_node_clocks or [])
+                except Exception as e:
+                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion to CCF capabilities failed: {}"
+                                          .format(receiver["id"], sender_id, e))
+
+                # Verify we have capability sets
+                if len(flow_caps.capsets) == 0:
+                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion did not produce any CCF capability sets"
+                                          .format(receiver["id"], sender_id))
+
+                # Verify that Flow capabilities are compatible with receiver capabilities using CCF
+                compatible, error_msg = self._verify_receiver_ccf_capability_compatibility(receiver, flow_caps)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
+            if len(receiver_tested) == 0:
+                return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
+                                         "PLEASE ACTIVATE A RECEIVER to TEST")
+
+            return test.PASS("Receivers {} have been tested for associated sender Flow/Source/Sender to CCF capabilities conversion and verification"
+                                  .format(receiver_tested))
+
+        except Exception as e:
+            return test.FAIL("Error during test 08: {}".format(e))
+
+    def _get_sender_from_registry(self, sender_id):
+        """
+        Get sender information from the registry using the query API
+        """
+        try:
+            # Use the query API to get sender information
+            query_url = self.query_url
+            if not query_url:
+                return None
+
+            # Query for the specific sender
+            url = "{}senders/{}".format(query_url, sender_id)
+            valid, response = self.do_request("GET", url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _get_flow_from_registry(self, flow_id):
+        """
+        Get flow information from the registry using the query API
+        """
+        try:
+            query_url = self.query_url
+            if not query_url:
+                return None
+
+            # Query for the specific flow
+            url = "{}flows/{}".format(query_url, flow_id)
+            valid, response = self.do_request("GET", url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _get_source_from_registry(self, source_id):
+        """
+        Get source information from the registry using the query API
+        """
+        try:
+            query_url = self.query_url
+            if not query_url:
+                return None
+
+            # Query for the specific source
+            url = "{}sources/{}".format(query_url, source_id)
+            valid, response = self.do_request("GET", url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _get_device_from_registry(self, device_id):
+        """
+        Get device information from the registry using the query API
+        """
+        try:
+            query_url = self.query_url
+            if not query_url:
+                return None
+
+            # Query for the specific device
+            url = "{}devices/{}".format(query_url, device_id)
+            valid, response = self.do_request("GET", url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _get_node_from_registry(self, node_id):
+        """
+        Get node information from the registry using the query API
+        """
+        try:
+            query_url = self.query_url
+            if not query_url:
+                return None
+
+            # Query for the specific node
+            url = "{}nodes/{}".format(query_url, node_id)
+            valid, response = self.do_request("GET", url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+        except Exception:
+            return None
+
+
+    def _verify_sender_ccf_capability_compatibility(self, sender, sdp_caps):
+        """
+        Verify that SDP capabilities are compatible with sender CCF capabilities using proper CCF functions
+
+        This method uses CCF convert_caps_json_to_caps and conset_included_in_caps functions
+        to properly verify that the SDP capabilities are included in the sender's CCF constraints.
+
+        Args:
+            sender: Sender resource from IS-04
+            sdp_caps: CCF Caps from SDP conversion
+
+        Returns:
+            tuple: (success, error_message) where success is True if compatible,
+                   False with error message if not compatible or error occurred
+        """
+        try:
+            # Get sender CCF capabilities from IS-04 and convert to CCF Caps
+            sender_ccf_caps = self._get_sender_ccf_capabilities(sender)
+
+            if not sender_ccf_caps:
+                # If sender has no capability constraints defined, assume compatibility
+                return True, ""
+
+            # Convert sender JSON caps to CCF Caps object
+            try:
+                sender_caps = convert_caps_json_to_caps(sender_ccf_caps)
+            except Exception as e:
+                return False, "Sender {} caps JSON to CCF conversion failed: {}".format(sender["id"], e)
+
+            sender_active_constraints = self._get_is11_active_constraints(sender["id"])
+            if sender_active_constraints:            
+                try:
+                    sender_cons = convert_caps_json_to_caps(sender_active_constraints).to_cons()
+                except Exception as e:
+                    return False, "Sender {} active constraints JSON to CCF conversion failed: {}".format(sender["id"], e)
+
+                sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
+
+            # Get the primary capability set from SDP
+            if len(sdp_caps.capsets) == 0:
+                return False, "Sender {} SDP transport file produced no capability sets".format(sender["id"])
+
+            primary_capset = sdp_caps.capsets[0]
+
+            # Use CCF conset_included_in_caps to verify inclusion
+            # This checks if the SDP capset is included in (compatible with) the sender's caps
+            try:
+                is_included = conset_included_in_caps(primary_capset.to_conset(), sender_caps)
+                if is_included:
+                    return True, ""
+                else:
+                    return False, "Sender {} SDP capabilities are not included in sender CCF constraints".format(sender["id"])
+            except Exception as e:
+                return False, "Sender {} CCF capability inclusion check failed: {}".format(sender["id"], e)
+
+        except Exception as e:
+            return False, "Sender {} CCF capability verification error: {}".format(sender["id"], e)
+
+    def _verify_receiver_ccf_capability_compatibility(self, receiver, sdp_caps):
+        """
+        Verify that SDP capabilities are compatible with receiver CCF capabilities using proper CCF functions
+
+        This method uses CCF convert_caps_json_to_caps and conset_included_in_caps functions
+        to properly verify that the SDP capabilities are included in the receiver's CCF constraints.
+
+        Args:
+            receiver: Receiver resource from IS-04
+            sdp_caps: CCF Caps from SDP conversion
+
+        Returns:
+            tuple: (success, error_message) where success is True if compatible,
+                   False with error message if not compatible or error occurred
+        """
+        try:
+            # Get receiver CCF capabilities from IS-04 and convert to CCF Caps
+            receiver_ccf_caps = self._get_receiver_ccf_capabilities(receiver)
+
+            if not receiver_ccf_caps:
+                # If receiver has no capability constraints defined, assume compatibility
+                return True, ""
+
+            # Convert receiver JSON caps to CCF Caps object
+            try:
+                receiver_caps = convert_caps_json_to_caps(receiver_ccf_caps)
+            except Exception as e:
+                return False, "Receiver {} caps JSON to CCF conversion failed: {}".format(receiver["id"], e)
+
+            # Get the primary capability set from SDP
+            if len(sdp_caps.capsets) == 0:
+                return False, "Receiver {} SDP active parameters produced no capability sets".format(receiver["id"])
+
+            primary_capset = sdp_caps.capsets[0]
+
+            # Use CCF conset_included_in_caps to verify inclusion
+            # This checks if the SDP capset is included in (compatible with) the receiver's caps
+            try:
+                is_included = conset_included_in_caps(primary_capset.to_conset(), receiver_caps)
+                if is_included:
+                    return True, ""
+                else:
+                    return False, "Receiver {} SDP capabilities are not included in receiver CCF constraints".format(receiver["id"])
+            except Exception as e:
+                return False, "Receiver {} CCF capability inclusion check failed: {}".format(receiver["id"], e)
+
+        except Exception as e:
+            return False, "Receiver {} CCF capability verification error: {}".format(receiver["id"], e)
+
+    def _get_receiver_ccf_capabilities(self, receiver):
+        """
+        Get receiver CCF capabilities from IS-04 receiver resource
+
+        Returns:
+            Dict of CCF capabilities JSON or None if not available
+        """
+        try:
+            # Check if receiver has CCF capabilities defined
+            if "caps" not in receiver or not receiver["caps"]:
+                return None
+
+            # Return the receiver's CCF capabilities JSON directly
+            # This will be converted to CCF Caps object by convert_caps_json_to_caps
+            return receiver["caps"]
+
+        except Exception:
+            # Return None on any error - the calling method will handle error reporting
+            return None
+
+    def _get_sender_ccf_capabilities(self, sender):
+        """
+        Get sender CCF capabilities from IS-04 sender resource
+
+        Returns:
+            Dict of CCF capabilities JSON or None if not available
+        """
+        try:
+            # Check if sender has CCF capabilities defined
+            if "caps" not in sender or not sender["caps"]:
+                return None
+
+            # Return the sender's CCF capabilities JSON directly
+            # This will be converted to CCF Caps object by convert_caps_json_to_caps
+            return sender["caps"]
+
+        except Exception:
+            # Return None on any error - the calling method will handle error reporting
+            return None
+
     def prepare_subscription(self, resource_path, params=None, api_ver=None):
         """Prepare an object ready to send as the request body for a Query API subscription"""
         if params is None:
@@ -1052,6 +1724,60 @@ class MatroxSdpTest(GenericTest):
         except json.JSONDecodeError:
             raise NMOSTestException(test.FAIL("Non-JSON response returned for Query API subscription request"))
 
+    def _get_is11_active_constraints(self, sender_id):
+        """
+        Get IS-11 active constraints for a specific sender from its device's control endpoints
+
+        Args:
+            sender_id: The ID of the sender to get constraints for
+
+        Returns:
+            dict or None: Active constraints for the sender, or None if not found/unavailable
+        """
+        try:
+            # Get all devices
+            valid, result = self.get_is04_resources("devices")
+            if not valid:
+                return None
+
+            # Find the device that contains our sender
+            sender_device = None
+            valid, senders_result = self.get_is04_resources("senders")
+            if valid:
+                for sender in self.is04_resources["senders"].values():
+                    if sender["id"] == sender_id:
+                        device_id = sender.get("device_id")
+                        if device_id and device_id in self.is04_resources["devices"]:
+                            sender_device = self.is04_resources["devices"][device_id]
+                        break
+
+            if not sender_device:
+                return None
+
+            # Find IS-11 control endpoint in device controls
+            is11_endpoint = None
+            for control in sender_device.get("controls", []):
+                if control.get("type") == "urn:x-nmos:control:stream-compat/v1.0":
+                    is11_endpoint = control.get("href")
+                    break
+
+            if not is11_endpoint:
+                return None
+
+            # Query the IS-11 endpoint for active constraints of this sender
+            active_constraints_url = "{}/senders/{}/constraints/active".format(is11_endpoint.rstrip('/'), sender_id)
+
+            # Use the existing HTTP request mechanism
+            valid, response = self.do_request("GET", active_constraints_url)
+
+            if valid and response.status_code == 200:
+                return response.json()
+            else:
+                return None
+
+        except Exception as e:
+            # Silently fail for IS-11 constraints - they're optional
+            return None
 
 def GetSdpSamplingAsComponents(sdp: MatroxSdp):
 
