@@ -24,11 +24,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-  
+
 """
 Flow to CCF Capabilities Converter
 
-Note: some transport caiabilities can only be obtained omfr the SDP transport file.
+Note: some transport capabilities can only be obtained from the SDP transport file.
 
 TODO: add urn:x-nmos:cap:transport:usb_class
 
@@ -49,12 +49,12 @@ from .MatroxCCF import (
     CapTransportSynchronousMedia, CapTransportHkep, CapTransportPrivacy,
     CapTransport_ST2110_21_SenderType, CapTransportPacketTransmissionMode,
     CapTransportParameterSetsFlowMode, CapTransportParameterSetsTransportMode,
-    CapTransportChannelOrder, CapTransportInfoBlock
+    CapTransportChannelOrder, CapTransportInfoBlock, CapTransportBitRate
 )
 
 
 def ifelse(t, a, b):
-    if t:   
+    if t:
         return a
     else:
         return b
@@ -63,7 +63,8 @@ def ifelse(t, a, b):
 class FlowToCapabilitiesConverter:
     """Converts a Flow, Source and Sender) description to CCF Capabilities"""
 
-    def convert(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list] = None) -> Caps:
+    def convert(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any],
+                node_clocks: Optional[list] = None) -> Caps:
         """Convert a Flow dict (NMOS) and Source dict (NMOS) to Caps.
         """
         if not isinstance(flow, dict) or not isinstance(source, dict) or not isinstance(sender, dict):
@@ -91,7 +92,7 @@ class FlowToCapabilitiesConverter:
 
         elif flow_format == FormatMux:
             capset = self._convert_mux_flow_to_capset(flow, source, sender, node_clocks)
-            
+
         else:
             return Caps(capsets=[])
 
@@ -115,7 +116,8 @@ class FlowToCapabilitiesConverter:
         raise ValueError("FlowToCapabilities: unsupported NMOS flow format: %s" % fmt)
 
     # ----------------------- Explicit converters (public-style) -----------------------
-    def _convert_raw_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+    def _convert_raw_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                          sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
         caps: Dict[str, Capability] = {}
 
@@ -123,38 +125,53 @@ class FlowToCapabilitiesConverter:
         media_type = flow.get("media_type")
         if not isinstance(media_type, str):
             raise ValueError("FlowToCapabilities: missing media_type in raw video flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,),
+                                                                             type=RangeType.STRING))
 
         synchronous_media, clock_name = self._require_video_source(source)
 
         # grain rate (optional)
         grain = self._get_rational(flow, "grain_rate")
         caps[CapFormatGrainRate] = Capability(
-            CapFormatGrainRate, RangeValue(values=(grain,) if grain is not None else None,type=RangeType.RATIONAL)
+            CapFormatGrainRate, RangeValue(values=(grain,) if grain is not None else None, type=RangeType.RATIONAL)
         )
 
         # frame dimensions
         fw = self._get_int(flow, ["frame_width"])
         fh = self._get_int(flow, ["frame_height"])
-        caps[CapFormatFrameWidth] = Capability(CapFormatFrameWidth, RangeValue(values=(fw,) if fw is not None else None, type=RangeType.INT))
-        caps[CapFormatFrameHeight] = Capability(CapFormatFrameHeight, RangeValue(values=(fh,) if fh is not None else None, type=RangeType.INT))
+        caps[CapFormatFrameWidth] = Capability(CapFormatFrameWidth,
+                                               RangeValue(values=(fw,) if fw is not None else None,
+                                                          type=RangeType.INT))
+        caps[CapFormatFrameHeight] = Capability(CapFormatFrameHeight,
+                                                RangeValue(values=(fh,) if fh is not None else None,
+                                                           type=RangeType.INT))
 
         # interlace, colorspace, transfer
         im = flow.get("interlace_mode")
-        caps[CapFormatInterlaceMode] = Capability(CapFormatInterlaceMode, RangeValue(values=(im,) if im is not None else None, type=RangeType.STRING))
+        caps[CapFormatInterlaceMode] = Capability(CapFormatInterlaceMode,
+                                                  RangeValue(values=(im,) if im is not None else None,
+                                                             type=RangeType.STRING))
         cs = flow.get("colorspace")
-        caps[CapFormatColorspace] = Capability(CapFormatColorspace, RangeValue(values=(cs,) if cs is not None else None, type=RangeType.STRING))
+        caps[CapFormatColorspace] = Capability(CapFormatColorspace,
+                                               RangeValue(values=(cs,) if cs is not None else None,
+                                                          type=RangeType.STRING))
         tc = flow.get("transfer_characteristic")
-        caps[CapFormatTransferCharacteristic] = Capability(CapFormatTransferCharacteristic, RangeValue(values=(tc,) if tc is not None else None, type=RangeType.STRING))
+        caps[CapFormatTransferCharacteristic] = Capability(CapFormatTransferCharacteristic,
+                                                           RangeValue(values=(tc,) if tc is not None else None,
+                                                                      type=RangeType.STRING))
 
         components = flow.get("components")
         if not isinstance(components, list):
             raise ValueError("FlowToCapabilities: raw video flow missing components array")
         if isinstance(fw, int) and isinstance(fh, int):
             sampling = self._infer_sampling_from_components(components, fw, fh)
-            caps[CapFormatColorSampling] = Capability(CapFormatColorSampling, RangeValue(values=(sampling,) if sampling is not None else None, type=RangeType.STRING))
+            caps[CapFormatColorSampling] = Capability(CapFormatColorSampling,
+                                                      RangeValue(values=(sampling,) if sampling is not None
+                                                                 else None, type=RangeType.STRING))
         comp_depth = self._get_component_depth(components)
-        caps[CapFormatComponentDepth] = Capability(CapFormatComponentDepth, RangeValue(values=(comp_depth,) if comp_depth is not None else None, type=RangeType.INT))
+        caps[CapFormatComponentDepth] = Capability(CapFormatComponentDepth,
+                                                   RangeValue(values=(comp_depth,) if comp_depth is not None
+                                                              else None, type=RangeType.INT))
 
         layer = flow.get("urn:x-matrox:layer", None)
         format = None
@@ -162,26 +179,44 @@ class FlowToCapabilitiesConverter:
         if layer is not None:
             format = FormatVideo
 
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,) if synchronous_media is not None else None, type=RangeType.BOOL))
+            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
+                                                            RangeValue(values=(synchronous_media,)
+                                                                       if synchronous_media is not None
+                                                                       else None, type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
-            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType, RangeValue(values=(sender_type,) if sender_type is not None else None, type=RangeType.STRING))
+            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType,
+                                                                 RangeValue(values=(sender_type,)
+                                                                            if sender_type is not None
+                                                                            else None, type=RangeType.STRING))
 
             clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
+            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType,
+                                                        RangeValue(values=(clk_ref,)
+                                                                   if clk_ref is not None
+                                                                   else None, type=RangeType.STRING))
 
             hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
+            caps[CapTransportHkep] = Capability(CapTransportHkep,
+                                                RangeValue(values=(hkep,)
+                                                           if hkep is not None else None, type=RangeType.BOOL))
 
             privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
+            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
+                                                   RangeValue(values=(privacy,)
+                                                              if privacy is not None else None, type=RangeType.BOOL))
 
             info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
+            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
+                                                     RangeValue(values=tuple(info_block)
+                                                                if info_block is not None
+                                                                and isinstance(info_block, list)
+                                                                else None, type=RangeType.INT))
 
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
-    def _convert_coded_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+    def _convert_coded_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                            sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
         """Build CapSet for coded video flows (mirrors Go getFlowProperties coded video branch)."""
 
         caps: Dict[str, Capability] = {}
@@ -190,206 +225,333 @@ class FlowToCapabilitiesConverter:
         media_type = flow.get("media_type")
         if not isinstance(media_type, str):
             raise ValueError("FlowToCapabilities: missing media_type in raw video flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType,
+                                              RangeValue(values=(media_type,), type=RangeType.STRING))
 
         synchronous_media, clock_name = self._require_video_source(source)
 
         # grain rate (optional)
         grain = self._get_rational(flow, "grain_rate")
-        caps[CapFormatGrainRate] = Capability(CapFormatGrainRate, RangeValue(values=(grain,) if grain is not None else None, type=RangeType.RATIONAL))
+        caps[CapFormatGrainRate] = Capability(CapFormatGrainRate,
+                                              RangeValue(values=(grain,) if grain is not None
+                                                         else None, type=RangeType.RATIONAL))
 
         # frame dimensions
         fw = self._get_int(flow, ["frame_width"])
         fh = self._get_int(flow, ["frame_height"])
-        caps[CapFormatFrameWidth] = Capability(CapFormatFrameWidth, RangeValue(values=(fw,) if fw is not None else None, type=RangeType.INT))
-        caps[CapFormatFrameHeight] = Capability(CapFormatFrameHeight, RangeValue(values=(fh,) if fh is not None else None, type=RangeType.INT))
+        caps[CapFormatFrameWidth] = Capability(CapFormatFrameWidth,
+                                               RangeValue(values=(fw,) if fw is not None
+                                                          else None, type=RangeType.INT))
+        caps[CapFormatFrameHeight] = Capability(CapFormatFrameHeight,
+                                                RangeValue(values=(fh,) if fh is not None
+                                                           else None, type=RangeType.INT))
 
         # interlace, colorspace, transfer
         im = flow.get("interlace_mode")
-        caps[CapFormatInterlaceMode] = Capability(CapFormatInterlaceMode, RangeValue(values=(im,) if im is not None else None, type=RangeType.STRING))
+        caps[CapFormatInterlaceMode] = Capability(CapFormatInterlaceMode,
+                                                  RangeValue(values=(im,) if im is not None
+                                                             else None, type=RangeType.STRING))
         cs = flow.get("colorspace")
-        caps[CapFormatColorspace] = Capability(CapFormatColorspace, RangeValue(values=(cs,) if cs is not None else None, type=RangeType.STRING))
+        caps[CapFormatColorspace] = Capability(CapFormatColorspace,
+                                               RangeValue(values=(cs,) if cs is not None
+                                                          else None, type=RangeType.STRING))
         tc = flow.get("transfer_characteristic")
-        caps[CapFormatTransferCharacteristic] = Capability(CapFormatTransferCharacteristic, RangeValue(values=(tc,) if tc is not None else None, type=RangeType.STRING))
+        caps[CapFormatTransferCharacteristic] = Capability(CapFormatTransferCharacteristic,
+                                                           RangeValue(values=(tc,) if tc is not None
+                                                                      else None, type=RangeType.STRING))
 
         components = flow.get("components")
         if not isinstance(components, list):
             raise ValueError("FlowToCapabilities: raw video flow missing components array")
         if isinstance(fw, int) and isinstance(fh, int):
             sampling = self._infer_sampling_from_components(components, fw, fh)
-            caps[CapFormatColorSampling] = Capability(CapFormatColorSampling, RangeValue(values=(sampling,) if sampling is not None else None, type=RangeType.STRING))
+            caps[CapFormatColorSampling] = Capability(CapFormatColorSampling,
+                                                      RangeValue(values=(sampling,) if sampling is not None
+                                                                 else None, type=RangeType.STRING))
         comp_depth = self._get_component_depth(components)
-        caps[CapFormatComponentDepth] = Capability(CapFormatComponentDepth, RangeValue(values=(comp_depth,) if comp_depth is not None else None, type=RangeType.INT))
+        caps[CapFormatComponentDepth] = Capability(CapFormatComponentDepth,
+                                                   RangeValue(values=(comp_depth,) if comp_depth is not None
+                                                              else None, type=RangeType.INT))
 
         # coded video extras
         bitrate = self._get_int(flow, ["bit_rate"])  # Kbps
-        caps[CapFormatBitRate] = Capability(CapFormatBitRate, RangeValue(values=(bitrate,) if bitrate is not None else None, type=RangeType.INT))
+        caps[CapFormatBitRate] = Capability(CapFormatBitRate,
+                                            RangeValue(values=(bitrate,) if bitrate is not None
+                                                       else None, type=RangeType.INT))
         cbr = flow.get("constant_bit_rate")
-        caps[CapFormatConstantBitRate] = Capability(CapFormatConstantBitRate, RangeValue(values=(cbr,) if cbr is not None else None, type=RangeType.BOOL))
+        caps[CapFormatConstantBitRate] = Capability(CapFormatConstantBitRate,
+                                                    RangeValue(values=(cbr,) if cbr is not None
+                                                               else None, type=RangeType.BOOL))
         profile = flow.get("profile")
-        caps[CapFormatProfile] = Capability(CapFormatProfile, RangeValue(values=(profile,) if profile is not None else None, type=RangeType.STRING))
+        caps[CapFormatProfile] = Capability(CapFormatProfile,
+                                            RangeValue(values=(profile,) if profile is not None
+                                                       else None, type=RangeType.STRING))
         level = flow.get("level")
-        caps[CapFormatLevel] = Capability(CapFormatLevel, RangeValue(values=(level,) if level is not None else None, type=RangeType.STRING))
+        caps[CapFormatLevel] = Capability(CapFormatLevel,
+                                          RangeValue(values=(level,) if level is not None
+                                                     else None, type=RangeType.STRING))
         sublevel = flow.get("sublevel") or flow.get("sub_level")
-        caps[CapFormatSublevel] = Capability(CapFormatSublevel, RangeValue(values=(sublevel,) if sublevel is not None else None, type=RangeType.STRING))
+        caps[CapFormatSublevel] = Capability(CapFormatSublevel,
+                                             RangeValue(values=(sublevel,) if sublevel is not None
+                                                        else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
         format = None
 
         if layer is not None:
             format = FormatVideo
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
+            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
+                                                            RangeValue(values=(synchronous_media,),
+                                                                       type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
-            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType, RangeValue(values=(sender_type,) if sender_type is not None else None, type=RangeType.STRING))
+            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType,
+                                                                 RangeValue(values=(sender_type,)
+                                                                            if sender_type is not None
+                                                                            else None, type=RangeType.STRING))
 
             packet_transmission_mode = sender.get("packet_transmission_mode")
-            caps[CapTransportPacketTransmissionMode] = Capability(CapTransportPacketTransmissionMode, RangeValue(values=(packet_transmission_mode,) if packet_transmission_mode is not None else None, type=RangeType.STRING))
+            caps[CapTransportPacketTransmissionMode] = Capability(CapTransportPacketTransmissionMode,
+                                                                  RangeValue(values=(packet_transmission_mode,)
+                                                                             if packet_transmission_mode is not None
+                                                                             else None, type=RangeType.STRING))
 
             paramerer_sets_flow_mode = sender.get("parameter_sets_flow_mode")
-            caps[CapTransportParameterSetsFlowMode] = Capability(CapTransportParameterSetsFlowMode, RangeValue(values=(paramerer_sets_flow_mode,) if paramerer_sets_flow_mode is not None else None, type=RangeType.STRING))
+            caps[CapTransportParameterSetsFlowMode] = Capability(CapTransportParameterSetsFlowMode,
+                                                                 RangeValue(values=(paramerer_sets_flow_mode,)
+                                                                            if paramerer_sets_flow_mode is not None
+                                                                            else None, type=RangeType.STRING))
 
             parameter_sets_transport_mode = sender.get("parameter_sets_transport_mode")
-            caps[CapTransportParameterSetsTransportMode] = Capability(CapTransportParameterSetsTransportMode, RangeValue(values=(parameter_sets_transport_mode,) if parameter_sets_transport_mode is not None else None, type=RangeType.STRING))
+            caps[CapTransportParameterSetsTransportMode] = Capability(
+                CapTransportParameterSetsTransportMode,
+                RangeValue(values=(parameter_sets_transport_mode,)
+                           if parameter_sets_transport_mode is not None
+                           else None, type=RangeType.STRING))
 
             transport_bitrate = sender.get("transport_bitrate")
-            caps[CapTransportBitRate] = Capability(CapTransportBitRate, RangeValue(values=(transport_bitrate,) if transport_bitrate is not None else None, type=RangeType.INT))
+            caps[CapTransportBitRate] = Capability(CapTransportBitRate,
+                                                   RangeValue(values=(transport_bitrate,)
+                                                              if transport_bitrate is not None
+                                                              else None, type=RangeType.INT))
 
             clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
+            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType,
+                                                        RangeValue(values=(clk_ref,)
+                                                                   if clk_ref is not None
+                                                                   else None, type=RangeType.STRING))
 
             hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
+            caps[CapTransportHkep] = Capability(CapTransportHkep,
+                                                RangeValue(values=(hkep,) if hkep is not None
+                                                           else None, type=RangeType.BOOL))
 
             privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
+            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
+                                                   RangeValue(values=(privacy,) if privacy is not None
+                                                              else None, type=RangeType.BOOL))
 
             info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
+            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
+                                                     RangeValue(values=tuple(info_block)
+                                                                if info_block is not None
+                                                                and isinstance(info_block, list)
+                                                                else None, type=RangeType.INT))
 
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
-    def _convert_coded_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+    def _convert_coded_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                            sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
         caps: Dict[str, Capability] = {}
 
         media_type = flow.get("media_type")
         if not isinstance(media_type, str):
             raise ValueError("FlowToCapabilities: missing media_type in coded audio flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType,
+                                              RangeValue(values=(media_type,), type=RangeType.STRING))
 
         channels, synchronous_media, clock_name = self._require_audio_source(source)
-        caps[CapFormatChannelCount] = Capability(CapFormatChannelCount, RangeValue(values=(len(channels),), type=RangeType.INT))
+        caps[CapFormatChannelCount] = Capability(CapFormatChannelCount,
+                                                 RangeValue(values=(len(channels),), type=RangeType.INT))
 
         # sample_rate
         sample_rate = self._get_sample_rate(flow)
-        caps[CapFormatSampleRate] = Capability(CapFormatSampleRate, RangeValue(values=(sample_rate,) if sample_rate is not None else None, type=RangeType.RATIONAL))
+        caps[CapFormatSampleRate] = Capability(CapFormatSampleRate,
+                                               RangeValue(values=(sample_rate,) if sample_rate is not None
+                                                          else None, type=RangeType.RATIONAL))
 
         # coded audio extras
         bitrate = self._get_int(flow, ["bit_rate"])  # Kbps
-        caps[CapFormatBitRate] = Capability(CapFormatBitRate, RangeValue(values=(bitrate,) if bitrate is not None else None, type=RangeType.INT))
+        caps[CapFormatBitRate] = Capability(CapFormatBitRate,
+                                            RangeValue(values=(bitrate,) if bitrate is not None
+                                                       else None, type=RangeType.INT))
         cbr = flow.get("constant_bit_rate")
-        caps[CapFormatConstantBitRate] = Capability(CapFormatConstantBitRate, RangeValue(values=(cbr,) if cbr is not None else None, type=RangeType.BOOL))
+        caps[CapFormatConstantBitRate] = Capability(CapFormatConstantBitRate,
+                                                    RangeValue(values=(cbr,) if cbr is not None
+                                                               else None, type=RangeType.BOOL))
         profile = flow.get("profile")
-        caps[CapFormatProfile] = Capability(CapFormatProfile, RangeValue(values=(profile,) if profile is not None else None, type=RangeType.STRING))
+        caps[CapFormatProfile] = Capability(CapFormatProfile,
+                                            RangeValue(values=(profile,) if profile is not None
+                                                       else None, type=RangeType.STRING))
         level = flow.get("level")
-        caps[CapFormatLevel] = Capability(CapFormatLevel, RangeValue(values=(level,) if level is not None else None, type=RangeType.STRING))
-
-        layer = flow.get("urn:x-matrox:layer", None)
-        format= None
-
-        if layer is not None:
-            format = FormatAudio
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
-
-            sender_type = sender.get("sender_type")
-            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType, RangeValue(values=(sender_type,) if sender_type is not None else None, type=RangeType.STRING))
-
-            packet_transmission_mode = sender.get("packet_transmission_mode")
-            caps[CapTransportPacketTransmissionMode] = Capability(CapTransportPacketTransmissionMode, RangeValue(values=(packet_transmission_mode,) if packet_transmission_mode is not None else None, type=RangeType.STRING))
-
-            parameter_sets_flow_mode = sender.get("parameter_sets_flow_mode")
-            caps[CapTransportParameterSetsFlowMode] = Capability(CapTransportParameterSetsFlowMode, RangeValue(values=(parameter_sets_flow_mode,) if parameter_sets_flow_mode is not None else None, type=RangeType.STRING))
-
-            parameter_sets_transport_mode = sender.get("parameter_sets_transport_mode")
-            caps[CapTransportParameterSetsTransportMode] = Capability(CapTransportParameterSetsTransportMode, RangeValue(values=(parameter_sets_transport_mode,) if parameter_sets_transport_mode is not None else None, type=RangeType.STRING))
-
-            channel_order = sender.get("channel_order")
-            caps[CapTransportChannelOrder] = Capability(CapTransportChannelOrder, RangeValue(values=(channel_order,) if channel_order is not None else None, type=RangeType.STRING))
-
-            transport_bitrate = sender.get("transport_bitrate")
-            caps[CapTransportBitRate] = Capability(CapTransportBitRate, RangeValue(values=(transport_bitrate,) if transport_bitrate is not None else None, type=RangeType.INT))
-
-            clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
-
-            hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
-
-            privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
-
-            info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
-
-        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
-
-    def _convert_raw_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
-
-        caps: Dict[str, Capability] = {}
-
-        media_type = flow.get("media_type")
-        if not isinstance(media_type, str):
-            raise ValueError("FlowToCapabilities: missing media_type in coded audio flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
-
-        channels, synchronous_media, clock_name = self._require_audio_source(source)
-        caps[CapFormatChannelCount] = Capability(CapFormatChannelCount, RangeValue(values=(len(channels),), type=RangeType.INT))
-
-        # sample_rate
-        sample_rate = self._get_sample_rate(flow)
-        caps[CapFormatSampleRate] = Capability(CapFormatSampleRate, RangeValue(values=(sample_rate,) if sample_rate is not None else None, type=RangeType.RATIONAL))
-
-        # sample_depth
-        bit_depth = self._get_int(flow, ["bit_depth"])
-        caps[CapFormatSampleDepth] = Capability(CapFormatSampleDepth, RangeValue(values=(bit_depth,) if bit_depth is not None else None, type=RangeType.INT))
+        caps[CapFormatLevel] = Capability(CapFormatLevel,
+                                          RangeValue(values=(level,) if level is not None
+                                                     else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
         format = None
 
         if layer is not None:
             format = FormatAudio
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
+            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
+                                                            RangeValue(values=(synchronous_media,),
+                                                                       type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
-            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType, RangeValue(values=(sender_type,) if sender_type is not None else None, type=RangeType.STRING))
+            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType,
+                                                                 RangeValue(values=(sender_type,)
+                                                                            if sender_type is not None
+                                                                            else None, type=RangeType.STRING))
+
+            packet_transmission_mode = sender.get("packet_transmission_mode")
+            caps[CapTransportPacketTransmissionMode] = Capability(CapTransportPacketTransmissionMode,
+                                                                  RangeValue(values=(packet_transmission_mode,)
+                                                                             if packet_transmission_mode is not None
+                                                                             else None, type=RangeType.STRING))
+
+            parameter_sets_flow_mode = sender.get("parameter_sets_flow_mode")
+            caps[CapTransportParameterSetsFlowMode] = Capability(CapTransportParameterSetsFlowMode,
+                                                                 RangeValue(values=(parameter_sets_flow_mode,)
+                                                                            if parameter_sets_flow_mode is not None
+                                                                            else None, type=RangeType.STRING))
+
+            parameter_sets_transport_mode = sender.get("parameter_sets_transport_mode")
+            caps[CapTransportParameterSetsTransportMode] = Capability(
+                CapTransportParameterSetsTransportMode,
+                RangeValue(values=(parameter_sets_transport_mode,)
+                           if parameter_sets_transport_mode is not None
+                           else None, type=RangeType.STRING))
 
             channel_order = sender.get("channel_order")
-            caps[CapTransportChannelOrder] = Capability(CapTransportChannelOrder, RangeValue(values=(channel_order,) if channel_order is not None else None, type=RangeType.STRING))
+            caps[CapTransportChannelOrder] = Capability(CapTransportChannelOrder,
+                                                        RangeValue(values=(channel_order,)
+                                                                   if channel_order is not None
+                                                                   else None, type=RangeType.STRING))
+
+            transport_bitrate = sender.get("transport_bitrate")
+            caps[CapTransportBitRate] = Capability(CapTransportBitRate,
+                                                   RangeValue(values=(transport_bitrate,)
+                                                              if transport_bitrate is not None
+                                                              else None, type=RangeType.INT))
 
             clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
+            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType,
+                                                        RangeValue(values=(clk_ref,)
+                                                                   if clk_ref is not None
+                                                                   else None, type=RangeType.STRING))
 
             hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
+            caps[CapTransportHkep] = Capability(CapTransportHkep,
+                                                RangeValue(values=(hkep,) if hkep is not None
+                                                           else None, type=RangeType.BOOL))
 
             privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
+            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
+                                                   RangeValue(values=(privacy,) if privacy is not None
+                                                              else None, type=RangeType.BOOL))
 
             info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
+            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
+                                                     RangeValue(values=tuple(info_block)
+                                                                if info_block is not None
+                                                                and isinstance(info_block, list)
+                                                                else None, type=RangeType.INT))
 
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
-    def _convert_data_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+    def _convert_raw_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                          sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+
+        caps: Dict[str, Capability] = {}
+
+        media_type = flow.get("media_type")
+        if not isinstance(media_type, str):
+            raise ValueError("FlowToCapabilities: missing media_type in coded audio flow")
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType,
+                                              RangeValue(values=(media_type,), type=RangeType.STRING))
+
+        channels, synchronous_media, clock_name = self._require_audio_source(source)
+        caps[CapFormatChannelCount] = Capability(CapFormatChannelCount,
+                                                 RangeValue(values=(len(channels),), type=RangeType.INT))
+
+        # sample_rate
+        sample_rate = self._get_sample_rate(flow)
+        caps[CapFormatSampleRate] = Capability(CapFormatSampleRate,
+                                               RangeValue(values=(sample_rate,) if sample_rate is not None
+                                                          else None, type=RangeType.RATIONAL))
+
+        # sample_depth
+        bit_depth = self._get_int(flow, ["bit_depth"])
+        caps[CapFormatSampleDepth] = Capability(CapFormatSampleDepth,
+                                                RangeValue(values=(bit_depth,) if bit_depth is not None
+                                                           else None, type=RangeType.INT))
+
+        layer = flow.get("urn:x-matrox:layer", None)
+        format = None
+
+        if layer is not None:
+            format = FormatAudio
+            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
+                                                            RangeValue(values=(synchronous_media,),
+                                                                       type=RangeType.BOOL))
+
+            sender_type = sender.get("sender_type")
+            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType,
+                                                                 RangeValue(values=(sender_type,)
+                                                                            if sender_type is not None
+                                                                            else None, type=RangeType.STRING))
+
+            channel_order = sender.get("channel_order")
+            caps[CapTransportChannelOrder] = Capability(CapTransportChannelOrder,
+                                                        RangeValue(values=(channel_order,)
+                                                                   if channel_order is not None
+                                                                   else None, type=RangeType.STRING))
+
+            clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
+            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType,
+                                                        RangeValue(values=(clk_ref,) if clk_ref is not None
+                                                                   else None, type=RangeType.STRING))
+
+            hkep = sender.get("hkep")
+            caps[CapTransportHkep] = Capability(CapTransportHkep,
+                                                RangeValue(values=(hkep,) if hkep is not None
+                                                           else None, type=RangeType.BOOL))
+
+            privacy = sender.get("privacy")
+            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
+                                                   RangeValue(values=(privacy,) if privacy is not None
+                                                              else None, type=RangeType.BOOL))
+
+            info_block = sender.get("info_block")
+            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
+                                                     RangeValue(values=tuple(info_block) if info_block is not None
+                                                                and isinstance(info_block, list)
+                                                                else None, type=RangeType.INT))
+
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
+
+    def _convert_data_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                     sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
         caps: Dict[str, Capability] = {}
 
         media_type = flow.get("media_type")
         if not isinstance(media_type, str):
             raise ValueError("FlowToCapabilities: missing media_type in data flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
-        
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType,
+                                              RangeValue(values=(media_type,), type=RangeType.STRING))
+
         synchronous_media, clock_name = self._require_data_source(source)
 
         layer = flow.get("urn:x-matrox:layer", None)
@@ -397,46 +559,65 @@ class FlowToCapabilitiesConverter:
 
         if layer is not None:
             format = FormatData
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
+            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
+                                                            RangeValue(values=(synchronous_media,),
+                                                                       type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
-            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType, RangeValue(values=(sender_type,) if sender_type is not None else None, type=RangeType.STRING))
+            caps[CapTransport_ST2110_21_SenderType] = Capability(CapTransport_ST2110_21_SenderType,
+                                                                 RangeValue(values=(sender_type,)
+                                                                            if sender_type is not None
+                                                                            else None, type=RangeType.STRING))
 
             clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
+            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType,
+                                                        RangeValue(values=(clk_ref,) if clk_ref is not None
+                                                                   else None, type=RangeType.STRING))
 
             hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
+            caps[CapTransportHkep] = Capability(CapTransportHkep,
+                                                RangeValue(values=(hkep,) if hkep is not None
+                                                           else None, type=RangeType.BOOL))
 
             privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
+            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
+                                                   RangeValue(values=(privacy,) if privacy is not None
+                                                              else None, type=RangeType.BOOL))
 
             info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
+            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
+                                                     RangeValue(values=tuple(info_block)
+                                                                if info_block is not None
+                                                                and isinstance(info_block, list)
+                                                                else None, type=RangeType.INT))
 
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
-    def _convert_mux_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
+    def _convert_mux_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
+                                    sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
         caps: Dict[str, Capability] = {}
 
         media_type = flow.get("media_type")
         if not isinstance(media_type, str):
             raise ValueError("FlowToCapabilities: missing media_type in mux flow")
-        caps[CapFormatMediaType] = Capability(CapFormatMediaType, RangeValue(values=(media_type,), type=RangeType.STRING))
+        caps[CapFormatMediaType] = Capability(CapFormatMediaType,
+                                              RangeValue(values=(media_type,), type=RangeType.STRING))
 
         # mux: layers
-        v = self._get_int(flow, ["video_layers"])  
-        a = self._get_int(flow, ["audio_layers"])  
-        d = self._get_int(flow, ["data_layers"])   
-        caps[CapFormatVideoLayers] = Capability(CapFormatVideoLayers, RangeValue(values=(v,) if v is not None else None, type=RangeType.INT))
-        caps[CapFormatAudioLayers] = Capability(CapFormatAudioLayers, RangeValue(values=(a,) if a is not None else None, type=RangeType.INT))
-        caps[CapFormatDataLayers] = Capability(CapFormatDataLayers, RangeValue(values=(d,) if d is not None else None, type=RangeType.INT))
+        v = self._get_int(flow, ["video_layers"])
+        a = self._get_int(flow, ["audio_layers"])
+        d = self._get_int(flow, ["data_layers"])
+        caps[CapFormatVideoLayers] = Capability(CapFormatVideoLayers,
+                                                RangeValue(values=(v,) if v is not None else None, type=RangeType.INT))
+        caps[CapFormatAudioLayers] = Capability(CapFormatAudioLayers,
+                                                RangeValue(values=(a,) if a is not None else None, type=RangeType.INT))
+        caps[CapFormatDataLayers] = Capability(CapFormatDataLayers,
+                                               RangeValue(values=(d,) if d is not None else None, type=RangeType.INT))
 
         synchronous_media, clock_name = self._require_mux_source(source)
 
         return CapSet(caps=caps, label="Flow", preference=100, format=FormatMux, layer=None)
-
 
     def _is_raw_audio(self, flow: Dict[str, Any]) -> bool:
         mt = flow.get("media_type")
@@ -537,18 +718,22 @@ class FlowToCapabilitiesConverter:
         name_lower = clock_name.lower()
         for clk in node_clocks:
             if not isinstance(clk, dict):
-                raise ValueError("FlowToCapabilities: node_clocks entry is not a dict (invalid according to IS-04 schema)")
+                raise ValueError("FlowToCapabilities: node_clocks entry "
+                                 "is not a dict (invalid according to IS-04 schema)")
             if not isinstance(clk.get("name"), str):
-                raise ValueError("FlowToCapabilities: node_clocks entry is missing name (invalid according to IS-04 schema)")
+                raise ValueError("FlowToCapabilities: node_clocks entry "
+                                 "is missing name (invalid according to IS-04 schema)")
             if not isinstance(clk.get("ref_type"), str):
-                raise ValueError("FlowToCapabilities: node_clocks entry is missing ref_type (invalid according to IS-04 schema)")
+                raise ValueError("FlowToCapabilities: node_clocks entry "
+                                 "is missing ref_type (invalid according to IS-04 schema)")
 
             if clk.get("name").lower() != name_lower:
                 continue
 
             ref_type = clk.get("ref_type")
             if ref_type not in ("ptp", "internal"):
-                raise ValueError("FlowToCapabilities: node_clocks entry has invalid ref_type (invalid according to IS-04 schema)")
+                raise ValueError("FlowToCapabilities: node_clocks entry "
+                                 "has invalid ref_type (invalid according to IS-04 schema)")
 
             return ref_type
 
@@ -628,7 +813,7 @@ class FlowToCapabilitiesConverter:
         y = next((c for c in components if c.get("name") == "Y"), None)
         cb = next((c for c in components if c.get("name") == "Cb"), None)
         cr = next((c for c in components if c.get("name") == "Cr"), None)
-        
+
         if not y or not cb or not cr:
             return None
         yw, yh = y.get("width"), y.get("height")
@@ -644,7 +829,6 @@ class FlowToCapabilitiesConverter:
         return None
 
 
-def convert_flow_to_capabilities(flow: Dict[str, Any], source: Dict[str, Any], node_clocks: Optional[list] = None) -> Caps:
+def convert_flow_to_capabilities(flow: Dict[str, Any], source: Dict[str, Any],
+                                 node_clocks: Optional[list] = None) -> Caps:
     return FlowToCapabilitiesConverter().convert(flow, source, node_clocks)
-
-
