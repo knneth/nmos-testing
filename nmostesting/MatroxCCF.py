@@ -57,6 +57,7 @@ FormatAudio = "urn:x-nmos:format:audio"
 FormatVideo = "urn:x-nmos:format:video"
 FormatData = "urn:x-nmos:format:data"
 FormatMux = "urn:x-nmos:format:mux"
+FormatUnknown = "urn:x-nmos:format:UNKNOWN"
 
 CapFormatMediaType = "urn:x-nmos:cap:format:media_type"
 CapFormatEventType = "urn:x-nmos:cap:format:event_type"
@@ -87,11 +88,12 @@ CapTransportPacketTransmissionMode = "urn:x-nmos:cap:transport:packet_transmissi
 CapTransportParameterSetsFlowMode = "urn:x-matrox:cap:transport:parameter_sets_flow_mode"
 CapTransportParameterSetsTransportMode = "urn:x-matrox:cap:transport:parameter_sets_transport_mode"
 CapTransportChannelOrder = "urn:x-matrox:cap:transport:channel_order"
-CapTransportHkep = "urn:x-matrox:cap:transport:hkep"
-CapTransportPrivacy = "urn:x-matrox:cap:transport:privacy"
+CapTransportHkep = "urn:x-nmos:cap:transport:hkep"
+CapTransportPrivacy = "urn:x-nmos:cap:transport:privacy"
 CapTransportClockRefType = "urn:x-matrox:cap:transport:clock_ref_type"
 CapTransportInfoBlock = "urn:x-matrox:cap:transport:info_block"
 CapTransportSynchronousMedia = "urn:x-matrox:cap:transport:synchronous_media"
+CapTransportUsbClass = "urn:x-nmos:cap:transport:usb_class"
 
 CapMetaLabel = "urn:x-nmos:cap:meta:label"
 CapMetaPreference = "urn:x-nmos:cap:meta:preference"
@@ -2463,6 +2465,7 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
 	    CapTransportClockRefType: RangeType.STRING,
 	    CapTransportInfoBlock: RangeType.INT,
 	    CapTransportSynchronousMedia: RangeType.BOOL,
+	    CapTransportUsbClass: RangeType.INT,
     }
 
     def parse_range_value(cap_constraints : Dict[str, Any], range_type: RangeType) -> RangeValue:
@@ -2478,7 +2481,7 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
                 if isinstance(item, dict):
                     numerator : Optional[int] = item.get("numerator") # type: ignore
                     denominator : Optional[int] = item.get("denominator", 1) # type: ignore
-                    if numerator is not None and isinstance(numerator, int) and isinstance(denominator, Optional[int]):
+                    if numerator is not None and isinstance(numerator, int) and (denominator is None or isinstance(denominator, int)):
                         try:
                             fraction = Fraction(numerator, denominator)
                             enumerated.append(fraction)
@@ -2502,7 +2505,7 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
         )
 
     capsets : List[CapSet] = []
-    constraint_sets = caps_json.get("caps", {}).get("constraint_sets", [])
+    constraint_sets = caps_json.get("caps", {}).get("constraint_sets", []) if "caps" in caps_json else caps_json.get("constraint_sets", [])
 
     for cs_index, cs in enumerate(constraint_sets, start=1):
 

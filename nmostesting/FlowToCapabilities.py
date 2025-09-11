@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
+#
+# Copyright (c) 2025, Matrox Graphics Inc.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions, and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions, and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  
 """
 Flow to CCF Capabilities Converter
 
@@ -10,7 +34,7 @@ TODO: add urn:x-nmos:cap:transport:usb_class
 
 """
 
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List, Union
 from fractions import Fraction
 
 from .MatroxCCF import (
@@ -133,7 +157,11 @@ class FlowToCapabilitiesConverter:
         caps[CapFormatComponentDepth] = Capability(CapFormatComponentDepth, RangeValue(values=(comp_depth,) if comp_depth is not None else None, type=RangeType.INT))
 
         layer = flow.get("urn:x-matrox:layer", None)
+        format = None
+
         if layer is not None:
+            format = FormatVideo
+
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,) if synchronous_media is not None else None, type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
@@ -151,7 +179,7 @@ class FlowToCapabilitiesConverter:
             info_block = sender.get("info_block")
             caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
 
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatVideo, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_coded_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
         """Build CapSet for coded video flows (mirrors Go getFlowProperties coded video branch)."""
@@ -206,7 +234,10 @@ class FlowToCapabilitiesConverter:
         caps[CapFormatSublevel] = Capability(CapFormatSublevel, RangeValue(values=(sublevel,) if sublevel is not None else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
+        format = None
+
         if layer is not None:
+            format = FormatVideo
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
@@ -236,7 +267,7 @@ class FlowToCapabilitiesConverter:
             info_block = sender.get("info_block")
             caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
 
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatVideo, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_coded_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
@@ -265,7 +296,10 @@ class FlowToCapabilitiesConverter:
         caps[CapFormatLevel] = Capability(CapFormatLevel, RangeValue(values=(level,) if level is not None else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
+        format= None
+
         if layer is not None:
+            format = FormatAudio
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
@@ -298,7 +332,7 @@ class FlowToCapabilitiesConverter:
             info_block = sender.get("info_block")
             caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
 
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatAudio, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_raw_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
@@ -321,7 +355,10 @@ class FlowToCapabilitiesConverter:
         caps[CapFormatSampleDepth] = Capability(CapFormatSampleDepth, RangeValue(values=(bit_depth,) if bit_depth is not None else None, type=RangeType.INT))
 
         layer = flow.get("urn:x-matrox:layer", None)
+        format = None
+
         if layer is not None:
+            format = FormatAudio
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
@@ -342,7 +379,7 @@ class FlowToCapabilitiesConverter:
             info_block = sender.get("info_block")
             caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
 
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatAudio, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_data_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
@@ -356,7 +393,10 @@ class FlowToCapabilitiesConverter:
         synchronous_media, clock_name = self._require_data_source(source)
 
         layer = flow.get("urn:x-matrox:layer", None)
+        format = None
+
         if layer is not None:
+            format = FormatData
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
 
             sender_type = sender.get("sender_type")
@@ -374,7 +414,7 @@ class FlowToCapabilitiesConverter:
             info_block = sender.get("info_block")
             caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
 
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatData, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_mux_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any], sender: Dict[str, Any], node_clocks: Optional[list]) -> CapSet:
 
@@ -395,23 +435,7 @@ class FlowToCapabilitiesConverter:
 
         synchronous_media, clock_name = self._require_mux_source(source)
 
-        layer = flow.get("urn:x-matrox:layer", None)
-        if layer is not None:
-            caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia, RangeValue(values=(synchronous_media,), type=RangeType.BOOL))
-
-            clk_ref = self._clock_ref_type_from_node_clocks(clock_name, node_clocks)
-            caps[CapTransportClockRefType] = Capability(CapTransportClockRefType, RangeValue(values=(clk_ref,) if clk_ref is not None else None, type=RangeType.STRING))
-
-            hkep = sender.get("hkep")
-            caps[CapTransportHkep] = Capability(CapTransportHkep, RangeValue(values=(hkep,) if hkep is not None else None, type=RangeType.BOOL))
-
-            privacy = sender.get("privacy")
-            caps[CapTransportPrivacy] = Capability(CapTransportPrivacy, RangeValue(values=(privacy,) if privacy is not None else None, type=RangeType.BOOL))
-
-            info_block = sender.get("info_block")
-            caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock, RangeValue(values=tuple(info_block) if info_block is not None and isinstance(info_block, list) else None, type=RangeType.INT))
-
-        return CapSet(caps=caps, label="Flow", preference=100, format=FormatMux, layer=layer)
+        return CapSet(caps=caps, label="Flow", preference=100, format=FormatMux, layer=None)
 
 
     def _is_raw_audio(self, flow: Dict[str, Any]) -> bool:
@@ -463,7 +487,7 @@ class FlowToCapabilitiesConverter:
                 return Fraction(num, den)
         return None
 
-    def _get_int(self, obj: Dict[str, Any], keys: Tuple[str, ...] | list) -> Optional[int]:
+    def _get_int(self, obj: Dict[str, Any], keys: Union[Tuple[str, ...], List[str]]) -> Optional[int]:
         for k in keys:
             v = obj.get(k)
             if isinstance(v, int):

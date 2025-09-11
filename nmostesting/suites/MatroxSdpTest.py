@@ -56,43 +56,38 @@ from urllib.parse import urlparse
 
 from .. import Config as CONFIG
 
-from .MatroxSdp import MatroxSdp, MatroxSdpEnums
+from ..MatroxSdp import MatroxSdp, MatroxSdpEnums
 
-from .MatroxSdpCheck import SdpCheckError
-from .MatroxSdpCheck import check_sdp_rfc4175
-from .MatroxSdpCheck import check_sdp_st2110_10
-from .MatroxSdpCheck import check_sdp_st2110_21
-from .MatroxSdpCheck import check_sdp_st2110_20
-from .MatroxSdpCheck import check_sdp_rfc9134
-from .MatroxSdpCheck import check_sdp_st2110_22
-from .MatroxSdpCheck import check_sdp_rfc3551
-from .MatroxSdpCheck import check_sdp_st2110_30
-from .MatroxSdpCheck import check_sdp_st2110_31
+from ..MatroxSdpCheck import SdpCheckError
+from ..MatroxSdpCheck import check_sdp_rfc4175
+from ..MatroxSdpCheck import check_sdp_st2110_10
+from ..MatroxSdpCheck import check_sdp_st2110_21
+from ..MatroxSdpCheck import check_sdp_st2110_20
+from ..MatroxSdpCheck import check_sdp_rfc9134
+from ..MatroxSdpCheck import check_sdp_st2110_22
+from ..MatroxSdpCheck import check_sdp_rfc3551
+from ..MatroxSdpCheck import check_sdp_st2110_30
+from ..MatroxSdpCheck import check_sdp_st2110_31
 
 # Import SDP to CCF capabilities converter
-from .SdpToCapabilities import convert_sdp_string_to_capabilities, SdpToCapabilitiesConverter
+from ..SdpToCapabilities import SdpToCapabilitiesConverter
+
 # Import Flow to CCF capabilities converter
-from .FlowToCapabilities import FlowToCapabilitiesConverter
-from .MatroxCCF import (
+from ..FlowToCapabilities import FlowToCapabilitiesConverter
+
+from ..MatroxCCF import (
     FormatVideo, FormatAudio, FormatData, FormatMux,
     CapFormatMediaType, CapFormatGrainRate, CapFormatFrameWidth, CapFormatFrameHeight,
     CapFormatInterlaceMode, CapFormatColorspace, CapFormatComponentDepth,
     CapFormatChannelCount, CapFormatSampleRate, CapTransportBitRate,
     CapFormatVideoLayers, CapMetaFormat, CapMetaLayer,
     Caps, CapSet, Capability, RangeValue, RangeType, caps_constrict_by_cons, conset_included_in_caps,
-    convert_caps_json_to_caps, capset_included_in_caps
+    convert_caps_json_to_caps
 )
 
 QUERY_API_KEY = "query"
 NODE_API_KEY = "node"
 CONNECTION_API_KEY = "connection"
-
-FormatVideo = "urn:x-nmos:format:video"
-FormatAudio = "urn:x-nmos:format:audio"
-FormatData = "urn:x-nmos:format:data"
-FormatDataEvent = "urn:x-nmos:format:data.event"
-FormatMux = "urn:x-nmos:format:mux"
-FormatUnknown = "urn:x-nmos:format:UNKNOWN"
 
 MuxOpaque = "video/MP2T"
 MuxFullyDescribedMpeg2TS = "application/MP2T"
@@ -592,7 +587,7 @@ class MatroxSdpTest(GenericTest):
                                     "PLEASE ACTIVATE A SENDER to TEST")
 
             if len(video_senders) > 0:
-                return test.PASS("Senders {} have been tested".format(sender_tested))
+                return test.PASS()
 
         except KeyError as ex:
             return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
@@ -879,7 +874,7 @@ class MatroxSdpTest(GenericTest):
                                     " A SENDER to TEST")
 
             if len(audio_senders) > 0:
-                return test.PASS("Senders {} have been tested".format(sender_tested))
+                return test.PASS()
 
         except KeyError as ex:
             return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
@@ -997,7 +992,7 @@ class MatroxSdpTest(GenericTest):
                 return test.FAIL("Node {} IS-04 API version v1.3 not found in Node API supported versions {}"
                                  .format(node_id, node["api"]["versions"]))
 
-            return test.PASS("Devices {} have been tested".format(found_devices))
+            return test.PASS()
 
         except Exception as e:
             return test.FAIL("Unexpected error type '{}' and message '{}'".format(type(e).__name__, str(e)))
@@ -1016,28 +1011,23 @@ class MatroxSdpTest(GenericTest):
             if not valid:
                 return test.FAIL(result)
 
-        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
-        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
-
         try:
             # Get all senders - we'll verify capabilities using CCF rather than filtering by format upfront
             all_senders = list(self.is04_resources["senders"].values())
             sender_tested = list()
 
             for sender in all_senders:
-                device = device_map[sender["device_id"]]
-                node = node_map[device["node_id"]]
 
                 # Check the transport => only RTP is currently supported by IPMX
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Sender {} transport {} is not RTP"
-                                          .format(sender["id"], sender["transport"]))
+                                     .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Sender {} not responding to IS-05 request"
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -1050,22 +1040,22 @@ class MatroxSdpTest(GenericTest):
                 # The sender being active it must provide an SDP transport file and be accessible
                 if "manifest_href" not in sender:
                     return test.FAIL("Sender {} MUST provide the 'manifest_href' attribute."
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 href = sender["manifest_href"]
                 if not href:
                     return test.FAIL("Sender {} MUST provide a valid 'manifest_href' attribute."
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 manifest_href_valid, manifest_href_response = self.do_request("GET", href)
                 if manifest_href_valid and manifest_href_response.status_code == 200:
                     pass
                 elif manifest_href_valid and manifest_href_response.status_code == 404:
                     return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
-                                          .format(sender["id"], href))
+                                     .format(sender["id"], href))
                 else:
                     return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
-                                          .format(sender["id"], href, manifest_href_response))
+                                     .format(sender["id"], href, manifest_href_response))
 
                 # Convert SDP transport file to CCF capabilities
                 sdp_content = manifest_href_response.text
@@ -1074,12 +1064,12 @@ class MatroxSdpTest(GenericTest):
                     sdp_caps = converter.convert_string(sdp_content)
                 except Exception as e:
                     return test.FAIL("Sender {} SDP transport file conversion to CCF capabilities failed: {}"
-                                          .format(sender["id"], e))
+                                     .format(sender["id"], e))
 
                 # Verify we have capability sets
                 if len(sdp_caps.capsets) == 0:
                     return test.FAIL("Sender {} SDP transport file did not produce any CCF capability sets"
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # Verify that SDP capabilities are compatible with sender capabilities using CCF
                 compatible, error_msg = self._verify_sender_ccf_capability_compatibility(sender, sdp_caps)
@@ -1088,17 +1078,17 @@ class MatroxSdpTest(GenericTest):
 
             if len(sender_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Senders found on the Node => "
-                                         "PLEASE ACTIVATE A SENDER to TEST")
+                                    "PLEASE ACTIVATE A SENDER to TEST")
 
-            return test.PASS("Senders {} have been tested for SDP to CCF capabilities conversion and verification"
-                                  .format(sender_tested))
+            return test.PASS()
 
         except Exception as e:
             return test.FAIL("Error during test 05: {}".format(e))
 
     def test_06(self, test):
         """
-        Test that SDP from receiver active parameters can be converted to CCF capabilities and verified against receiver capabilities
+        Test that SDP from receiver active parameters can be converted to CCF capabilities and verified
+        against receiver capabilities
         """
         self.test = test
 
@@ -1115,28 +1105,23 @@ class MatroxSdpTest(GenericTest):
         if not valid:
             return test.FAIL(result)
 
-        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
-        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
-
         try:
             # Get all receivers - we'll verify capabilities using CCF rather than filtering by format upfront
             all_receivers = list(self.is04_resources["receivers"].values())
             receiver_tested = list()
 
             for receiver in all_receivers:
-                device = device_map[receiver["device_id"]]
-                node = node_map[device["node_id"]]
 
                 # Check the transport => only RTP is currently supported by IPMX
                 if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Receiver {} transport {} is not RTP"
-                                          .format(receiver["id"], receiver["transport"]))
+                                     .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Receiver {} not responding to IS-05 request"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -1156,28 +1141,28 @@ class MatroxSdpTest(GenericTest):
                     sdp_content = transport_file["data"] if transport_file["type"] == "application/sdp" else None
                 except (KeyError, TypeError) as e:
                     return test.FAIL("Receiver {} active parameters have malformed transport_file structure: {}"
-                                          .format(receiver["id"], str(e)))
+                                     .format(receiver["id"], str(e)))
 
                 if not sdp_content:
                     return test.FAIL("Receiver {} active parameters do not contain valid SDP"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # Ensure SDP is a string
                 if not isinstance(sdp_content, str):
                     return test.FAIL("Receiver {} SDP is not a string format"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # Convert SDP from active parameters to CCF capabilities
                 try:
                     sdp_caps = converter.convert_string(sdp_content)
                 except Exception as e:
                     return test.FAIL("Receiver {} SDP active parameters conversion to CCF capabilities failed: {}"
-                                          .format(receiver["id"], e))
+                                     .format(receiver["id"], e))
 
                 # Verify we have capability sets
                 if len(sdp_caps.capsets) == 0:
                     return test.FAIL("Receiver {} SDP active parameters did not produce any CCF capability sets"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # Verify that SDP capabilities are compatible with receiver capabilities using CCF
                 compatible, error_msg = self._verify_receiver_ccf_capability_compatibility(receiver, sdp_caps)
@@ -1186,17 +1171,17 @@ class MatroxSdpTest(GenericTest):
 
             if len(receiver_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
-                                         "PLEASE ACTIVATE A RECEIVER to TEST")
+                                    "PLEASE ACTIVATE A RECEIVER to TEST")
 
-            return test.PASS("Receivers {} have been tested for SDP active parameters to CCF capabilities conversion and verification"
-                                  .format(receiver_tested))
+            return test.PASS()
 
         except Exception as e:
             return test.FAIL("Error during test 06: {}".format(e))
 
     def test_07(self, test):
         """
-        Test that Flow, Source, and Sender information can be converted to CCF capabilities and verified against sender capabilities
+        Test that Flow, Source, and Sender information can be converted to CCF capabilities and
+        verified against sender capabilities
         """
         self.test = test
 
@@ -1222,13 +1207,13 @@ class MatroxSdpTest(GenericTest):
                 # Check the transport => only RTP is currently supported by IPMX
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Sender {} transport {} is not RTP"
-                                          .format(sender["id"], sender["transport"]))
+                                     .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Sender {} not responding to IS-05 request"
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -1242,13 +1227,13 @@ class MatroxSdpTest(GenericTest):
                 flow_id = sender.get("flow_id")
                 if not flow_id or flow_id not in flow_map:
                     return test.FAIL("Sender {} has invalid or missing flow_id"
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 flow = flow_map[flow_id]
                 source_id = flow.get("source_id")
                 if not source_id or source_id not in source_map:
                     return test.FAIL("Flow {} has invalid or missing source_id"
-                                          .format(flow_id))
+                                     .format(flow_id))
 
                 source = source_map[source_id]
 
@@ -1258,12 +1243,12 @@ class MatroxSdpTest(GenericTest):
                     flow_caps = converter.convert(flow, source, sender, node.get("clocks", []))
                 except Exception as e:
                     return test.FAIL("Sender {} Flow/Source/Sender conversion to CCF capabilities failed: {}"
-                                          .format(sender["id"], e))
+                                     .format(sender["id"], e))
 
                 # Verify we have capability sets
                 if len(flow_caps.capsets) == 0:
                     return test.FAIL("Sender {} Flow/Source/Sender conversion did not produce any CCF capability sets"
-                                          .format(sender["id"]))
+                                     .format(sender["id"]))
 
                 # Verify that Flow capabilities are compatible with sender capabilities using CCF
                 compatible, error_msg = self._verify_sender_ccf_capability_compatibility(sender, flow_caps)
@@ -1272,17 +1257,17 @@ class MatroxSdpTest(GenericTest):
 
             if len(sender_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Senders found on the Node => "
-                                         "PLEASE ACTIVATE A SENDER to TEST")
+                                    "PLEASE ACTIVATE A SENDER to TEST")
 
-            return test.PASS("Senders {} have been tested for Flow/Source/Sender to CCF capabilities conversion and verification"
-                                  .format(sender_tested))
+            return test.PASS()
 
         except Exception as e:
             return test.FAIL("Error during test 07: {}".format(e))
 
     def test_08(self, test):
         """
-        Test that Flow, Source, and Sender capabilities from associated active sender can be converted to CCF capabilities and verified against receiver capabilities
+        Test that Flow, Source, and Sender capabilities from associated active sender can be converted to CCF
+        capabilities and verified against receiver capabilities
         """
         self.test = test
 
@@ -1296,28 +1281,23 @@ class MatroxSdpTest(GenericTest):
         if not valid:
             return test.FAIL(result)
 
-        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
-        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
-
         try:
             # Get all receivers - we'll verify capabilities using CCF
             all_receivers = list(self.is04_resources["receivers"].values())
             receiver_tested = list()
 
             for receiver in all_receivers:
-                device = device_map[receiver["device_id"]]
-                node = node_map[device["node_id"]]
 
                 # Check the transport => only RTP is currently supported by IPMX
                 if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
                     return test.FAIL("Receiver {} transport {} is not RTP"
-                                          .format(receiver["id"], receiver["transport"]))
+                                     .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
                 valid, response = self.is05_utils.checkCleanRequest("GET", url)
                 if not valid:
                     return test.FAIL("Receiver {} not responding to IS-05 request"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
@@ -1331,46 +1311,41 @@ class MatroxSdpTest(GenericTest):
                 sender_id = None
 
                 # Try to extract sender_id from activation parameters
-                try:
-                    if "activation" in active and "sender_id" in active["activation"]:
-                        sender_id = active["activation"]["sender_id"]
-                    else:
-                        return test.FAIL("Receiver {} active parameters do not contain sender_id in activation"
-                                              .format(receiver["id"]))
-                except (KeyError, TypeError) as e:
-                    return test.FAIL("Receiver {} active parameters have malformed activation structure: {}"
-                                          .format(receiver["id"], str(e)))
-
+                if "sender_id" in active:
+                    sender_id = active["sender_id"]
+                else:
+                    return test.FAIL("Receiver {} active parameters do not contain sender_id"
+                                     .format(receiver["id"]))
                 if not sender_id:
                     return test.FAIL("Receiver {} has no associated sender_id"
-                                          .format(receiver["id"]))
+                                     .format(receiver["id"]))
 
                 # Get sender information from registry (similar to test_04 approach)
                 sender_data = self._get_sender_from_registry(sender_id)
                 if not sender_data:
                     return test.FAIL("Receiver {} associated sender {} not found in registry"
-                                          .format(receiver["id"], sender_id))
+                                     .format(receiver["id"], sender_id))
 
                 # Get flow and source information
                 flow_id = sender_data.get("flow_id")
                 if not flow_id:
                     return test.FAIL("Receiver {} associated sender {} has no flow_id"
-                                          .format(receiver["id"], sender_id))
+                                     .format(receiver["id"], sender_id))
 
                 flow_data = self._get_flow_from_registry(flow_id)
                 if not flow_data:
                     return test.FAIL("Receiver {} flow {} not found in registry"
-                                          .format(receiver["id"], flow_id))
+                                     .format(receiver["id"], flow_id))
 
                 source_id = flow_data.get("source_id")
                 if not source_id:
                     return test.FAIL("Receiver {} flow {} has no source_id"
-                                          .format(receiver["id"], flow_id))
+                                     .format(receiver["id"], flow_id))
 
                 source_data = self._get_source_from_registry(source_id)
                 if not source_data:
                     return test.FAIL("Receiver {} source {} not found in registry"
-                                          .format(receiver["id"], source_id))
+                                     .format(receiver["id"], source_id))
 
                 # Get the sender's node information for FlowToCapabilities
                 sender_node_clocks = None
@@ -1388,13 +1363,13 @@ class MatroxSdpTest(GenericTest):
                 try:
                     flow_caps = converter.convert(flow_data, source_data, sender_data, sender_node_clocks or [])
                 except Exception as e:
-                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion to CCF capabilities failed: {}"
-                                          .format(receiver["id"], sender_id, e))
+                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion to "
+                                     "CCF capabilities failed: {}".format(receiver["id"], sender_id, e))
 
                 # Verify we have capability sets
                 if len(flow_caps.capsets) == 0:
-                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion did not produce any CCF capability sets"
-                                          .format(receiver["id"], sender_id))
+                    return test.FAIL("Receiver {} associated sender {} Flow/Source/Sender conversion did"
+                                     " not produce any CCF capability sets".format(receiver["id"], sender_id))
 
                 # Verify that Flow capabilities are compatible with receiver capabilities using CCF
                 compatible, error_msg = self._verify_receiver_ccf_capability_compatibility(receiver, flow_caps)
@@ -1403,10 +1378,9 @@ class MatroxSdpTest(GenericTest):
 
             if len(receiver_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
-                                         "PLEASE ACTIVATE A RECEIVER to TEST")
+                                    "PLEASE ACTIVATE A RECEIVER to TEST")
 
-            return test.PASS("Receivers {} have been tested for associated sender Flow/Source/Sender to CCF capabilities conversion and verification"
-                                  .format(receiver_tested))
+            return test.PASS()
 
         except Exception as e:
             return test.FAIL("Error during test 08: {}".format(e))
@@ -1512,8 +1486,7 @@ class MatroxSdpTest(GenericTest):
         except Exception:
             return None
 
-
-    def _verify_sender_ccf_capability_compatibility(self, sender, sdp_caps):
+    def _verify_sender_ccf_capability_compatibility(self, sender, sdp_flow_caps):
         """
         Verify that SDP capabilities are compatible with sender CCF capabilities using proper CCF functions
 
@@ -1543,19 +1516,20 @@ class MatroxSdpTest(GenericTest):
                 return False, "Sender {} caps JSON to CCF conversion failed: {}".format(sender["id"], e)
 
             sender_active_constraints = self._get_is11_active_constraints(sender["id"])
-            if sender_active_constraints:            
+            if sender_active_constraints:
                 try:
                     sender_cons = convert_caps_json_to_caps(sender_active_constraints).to_cons()
                 except Exception as e:
-                    return False, "Sender {} active constraints JSON to CCF conversion failed: {}".format(sender["id"], e)
+                    return False, "Sender {} active constraints JSON to CCF conversion failed: {}".format(
+                        sender["id"], e)
 
                 sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
 
             # Get the primary capability set from SDP
-            if len(sdp_caps.capsets) == 0:
-                return False, "Sender {} SDP transport file produced no capability sets".format(sender["id"])
+            if len(sdp_flow_caps.capsets) == 0:
+                return False, "Sender {} SDP transport file or Flow  produced no capability sets".format(sender["id"])
 
-            primary_capset = sdp_caps.capsets[0]
+            primary_capset = sdp_flow_caps.capsets[0]
 
             # Use CCF conset_included_in_caps to verify inclusion
             # This checks if the SDP capset is included in (compatible with) the sender's caps
@@ -1564,14 +1538,15 @@ class MatroxSdpTest(GenericTest):
                 if is_included:
                     return True, ""
                 else:
-                    return False, "Sender {} SDP capabilities are not included in sender CCF constraints".format(sender["id"])
+                    return False, "Sender {} SDP or Flow capabilities are not included in sender CCF constraints".format(
+                        sender["id"])
             except Exception as e:
                 return False, "Sender {} CCF capability inclusion check failed: {}".format(sender["id"], e)
 
         except Exception as e:
             return False, "Sender {} CCF capability verification error: {}".format(sender["id"], e)
 
-    def _verify_receiver_ccf_capability_compatibility(self, receiver, sdp_caps):
+    def _verify_receiver_ccf_capability_compatibility(self, receiver, sdp_flow_caps):
         """
         Verify that SDP capabilities are compatible with receiver CCF capabilities using proper CCF functions
 
@@ -1601,10 +1576,10 @@ class MatroxSdpTest(GenericTest):
                 return False, "Receiver {} caps JSON to CCF conversion failed: {}".format(receiver["id"], e)
 
             # Get the primary capability set from SDP
-            if len(sdp_caps.capsets) == 0:
-                return False, "Receiver {} SDP active parameters produced no capability sets".format(receiver["id"])
+            if len(sdp_flow_caps.capsets) == 0:
+                return False, "Receiver {} SDP transport file or Flow produced no capability sets".format(receiver["id"])
 
-            primary_capset = sdp_caps.capsets[0]
+            primary_capset = sdp_flow_caps.capsets[0]
 
             # Use CCF conset_included_in_caps to verify inclusion
             # This checks if the SDP capset is included in (compatible with) the receiver's caps
@@ -1613,7 +1588,8 @@ class MatroxSdpTest(GenericTest):
                 if is_included:
                     return True, ""
                 else:
-                    return False, "Receiver {} SDP capabilities are not included in receiver CCF constraints".format(receiver["id"])
+                    return False, "Receiver {} SDP or Flow capabilities are not included in receiver CCF constraints".format(
+                        receiver["id"])
             except Exception as e:
                 return False, "Receiver {} CCF capability inclusion check failed: {}".format(receiver["id"], e)
 
@@ -1775,9 +1751,10 @@ class MatroxSdpTest(GenericTest):
             else:
                 return None
 
-        except Exception as e:
+        except Exception:
             # Silently fail for IS-11 constraints - they're optional
             return None
+
 
 def GetSdpSamplingAsComponents(sdp: MatroxSdp):
 

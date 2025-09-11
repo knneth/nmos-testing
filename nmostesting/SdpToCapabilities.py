@@ -210,10 +210,7 @@ class SdpToCapabilitiesConverter:
         return CapSet(
             caps=capabilities,
             label=label,
-            preference=preference,
-            format=format_type if not self.sdp.has_group_attribute else None,
-            layer=None  # Will be set for hierarchical structures
-        )
+            preference=preference)
         
     def _determine_format_type(self, media: MediaDescriptor) -> Optional[str]:
         """Determine the NMOS format type from media descriptor"""
@@ -454,8 +451,6 @@ class SdpToCapabilitiesConverter:
             
     def _add_ipmx_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add IPMX-specific capabilities"""
-        # Add Matrox-specific capabilities for IPMX streams
-        # This could include additional transport parameters, etc.
         pass
         
 
