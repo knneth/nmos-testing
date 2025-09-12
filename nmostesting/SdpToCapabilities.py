@@ -32,9 +32,10 @@ files into CCF (Constraint-Capability Framework) capabilities using the MatroxSd
 parser and MatroxCCF framework.
 """
 
+from re import I
 from typing import Optional, List, Dict
 from fractions import Fraction
-from .MatroxSdp import MatroxSdp, MediaDescriptor
+from .MatroxSdp import MatroxSdp, MediaDescriptor, MatroxSdpEnums, get_aac_profile_level_from_sdp, get_h264_profile_level_from_sdp, get_h265_profile_level_from_sdp
 from .MatroxCCF import (
     Caps, CapSet, Capability, RangeValue, RangeType,
     FormatVideo, FormatAudio, FormatData, FormatMux,
@@ -115,7 +116,7 @@ class SdpToCapabilitiesConverter:
                 secondary_capset = self._convert_media_to_capset(
                     self.sdp.secondary_media,
                     "Secondary_Verification",
-                    preference=90
+                    preference=100
                 )
 
                 # Verify capabilities are identical
@@ -127,7 +128,6 @@ class SdpToCapabilitiesConverter:
 
                 # Add redundancy metadata to primary capset
                 primary_capset.label = "Primary (with redundancy)"
-                # Could add redundancy capability here if needed
 
             capsets.append(primary_capset)
 
@@ -167,7 +167,7 @@ class SdpToCapabilitiesConverter:
 
         return True
 
-    def _convert_media_to_capset(self, media: MediaDescriptor, label: str, preference: int = 100) -> CapSet:
+    def _convert_media_to_capset(self, media: MediaDescriptor, label: str, preference: int = 100, mux : bool = False) -> CapSet:
         """
         Convert a MediaDescriptor to a CapSet
 
@@ -183,13 +183,12 @@ class SdpToCapabilitiesConverter:
         format_type = self._determine_format_type(media)
 
         # Media type capability
-        if format_type:
-            media_type = self._get_media_type_from_format(format_type, media)
-            if media_type:
-                capabilities[CapFormatMediaType] = Capability(
-                    CapFormatMediaType,
-                    RangeValue(values=(media_type,), type=RangeType.STRING)
-                )
+        media_type = self._get_media_type_from_format(format_type, media)
+
+        capabilities[CapFormatMediaType] = Capability(
+            CapFormatMediaType,
+            RangeValue(values=(media_type,), type=RangeType.STRING)
+        )
 
         # Format-specific capabilities
         if format_type == FormatVideo:
@@ -198,65 +197,64 @@ class SdpToCapabilitiesConverter:
             self._add_audio_capabilities(media, capabilities)
         elif format_type == FormatData:
             self._add_data_capabilities(media, capabilities)
+        elif format_type == FormatMux:
+            self._add_mux_capabilities(media, capabilities, mux)
+        else:
+            raise ValueError("Unsupported format type: {}".format(format_type.s))
 
         # Transport capabilities
         self._add_transport_capabilities(media, capabilities)
-
-        # IPMX-specific capabilities
-        if media.ipmx:
-            self._add_ipmx_capabilities(media, capabilities)
 
         return CapSet(
             caps=capabilities,
             label=label,
             preference=preference)
 
-    def _determine_format_type(self, media: MediaDescriptor) -> Optional[str]:
+    def _determine_format_type(self, media: MediaDescriptor, mux: bool = False) -> Optional[str]:
         """Determine the NMOS format type from media descriptor"""
         if media.type is None:
-            return None
+            raise ValueError("Media descriptor missing type")
 
-        type_name = media.type.name if hasattr(media.type, 'name') else str(media.type)
-
-        if type_name.lower() == 'video':
+        if media.type == MatroxSdpEnums.Video:
+            assert media.format_code != 0 and media.format_string is None
             # Check if this is actually data (ST 2110-40)
-            if media.encoding_name and hasattr(media.encoding_name, 'name'):
-                encoding = media.encoding_name.name.lower()
-                if encoding == 'smpte291':
-                    return FormatData
-            return FormatVideo
-        elif type_name.lower() == 'audio':
-            return FormatAudio
-        elif type_name.lower() == 'application':
-            return FormatData
+            if media.encoding_name == MatroxSdpEnums.EncodingSmpte291:
+                return FormatData
+            elif media.encoding_name == MatroxSdpEnums.EncodingMP2T:
+                return FormatMux
+            else:
+                return FormatVideo
+        elif media.type == MatroxSdpEnums.Audio:
+            assert media.format_code != 0 and media.format_string is None
+            if media.encoding_name == MatroxSdpEnums.EncodingAM824 and mux:
+                return FormatMux
+            else:
+                return FormatAudio
+        elif media.type == MatroxSdpEnums.Application:
+            assert media.format_code == 0 and media.encoding_name is None
+            if media.format_string == MatroxSdpEnums.FormatUsb:
+                return FormatData
+            else:
+                return FormatMux
         else:
-            return None
+            raise ValueError("Unsupported media type: {}".format(media.type.s))
 
-    def _get_media_type_from_format(self, format_type: str, media: MediaDescriptor) -> Optional[str]:
+    def _get_media_type_from_format(self, format_type: str, media: MediaDescriptor, mux: bool = False) -> Optional[str]:
         """Get the media type string for capabilities"""
         if not media.encoding_name:
-            return None
+            raise ValueError("Media descriptor missing encoding name")
 
-        encoding = media.encoding_name.name if hasattr(media.encoding_name, 'name') else str(media.encoding_name)
+        # If the Receiver is of format mux then always application/
+        if mux:
+            type = "application/"
+        # Otherwise, use the media type
+        else:
+            return media.type.s
 
-        if format_type == FormatVideo:
-            if encoding.lower() == 'raw':
-                return "video/raw"
-            elif encoding.lower().startswith('jxsv'):
-                return "video/jxsv"
-            elif encoding.lower().startswith('h264'):
-                return "video/H264"
-            elif encoding.lower().startswith('h265'):
-                return "video/H265"
-        elif format_type == FormatAudio:
-            if encoding.lower().startswith('l'):
-                return f"audio/{encoding}"
-            elif encoding.lower() == 'mpeg4-generic':
-                return "audio/mpeg4-generic"
-        elif format_type == FormatData:
-            return "video/smpte291"
-
-        return None
+        if media.format_code != 0:
+            return type + media.encoding_name.s
+        else:
+            return type + media.format_string.s
 
     def _add_video_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add video-specific capabilities"""
@@ -296,7 +294,7 @@ class SdpToCapabilitiesConverter:
 
         # Colorimetry
         if media.colorimetry:
-            colorspace = media.colorimetry.name if hasattr(media.colorimetry, 'name') else str(media.colorimetry)
+            colorspace = str(media.colorimetry)
             capabilities[CapFormatColorspace] = Capability(
                 CapFormatColorspace,
                 RangeValue(values=(colorspace,), type=RangeType.STRING)
@@ -304,16 +302,15 @@ class SdpToCapabilitiesConverter:
 
         # Transfer characteristic
         if media.transfer_characteristic:
-            transfer_char = media.transfer_characteristic.name if hasattr(
-                media.transfer_characteristic, 'name') else str(media.transfer_characteristic)
+            transfer_characteristic = str(media.transfer_characteristic)
             capabilities[CapFormatTransferCharacteristic] = Capability(
                 CapFormatTransferCharacteristic,
-                RangeValue(values=(transfer_char,), type=RangeType.STRING)
+                RangeValue(values=(transfer_characteristic,), type=RangeType.STRING)
             )
 
         # Color sampling
         if media.sampling:
-            sampling = media.sampling.name if hasattr(media.sampling, 'name') else str(media.sampling)
+            sampling = str(media.sampling)
             capabilities[CapFormatColorSampling] = Capability(
                 CapFormatColorSampling,
                 RangeValue(values=(sampling,), type=RangeType.STRING)
@@ -326,27 +323,167 @@ class SdpToCapabilitiesConverter:
                 RangeValue(values=(media.depth,), type=RangeType.INT)
             )
 
-        # Profile/Level for coded formats
-        if media.profile:
-            profile = media.profile.name if hasattr(media.profile, 'name') else str(media.profile)
-            capabilities[CapFormatProfile] = Capability(
-                CapFormatProfile,
-                RangeValue(values=(profile,), type=RangeType.STRING)
-            )
+        if media.encoding_name == MatroxSdpEnums.EncodingJxsv:
+            # Profile/Level for coded formats
+            if media.profile:
+                profile = str(media.profile)
+                capabilities[CapFormatProfile] = Capability(
+                    CapFormatProfile,
+                    RangeValue(values=(profile,), type=RangeType.STRING)
+                )
 
-        if media.level:
-            level = media.level.name if hasattr(media.level, 'name') else str(media.level)
-            capabilities[CapFormatLevel] = Capability(
-                CapFormatLevel,
-                RangeValue(values=(level,), type=RangeType.STRING)
-            )
+            if media.level:
+                level = str(media.level)
+                capabilities[CapFormatLevel] = Capability(
+                    CapFormatLevel,
+                    RangeValue(values=(level,), type=RangeType.STRING)
+                )
 
-        if media.sub_level:
-            sublevel = media.sub_level.name if hasattr(media.sub_level, 'name') else str(media.sub_level)
-            capabilities[CapFormatSublevel] = Capability(
-                CapFormatSublevel,
-                RangeValue(values=(sublevel,), type=RangeType.STRING)
-            )
+            if media.sub_level:
+                sublevel = str(media.sub_level)
+                capabilities[CapFormatSublevel] = Capability(
+                    CapFormatSublevel,
+                    RangeValue(values=(sublevel,), type=RangeType.STRING)
+                )
+
+            if media.jxsv_packet_mode == MatroxSdpEnums.CodeStream:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("codestream",), type=RangeType.STRING)
+                )
+            elif media.jxsv_trans_mode == MatroxSdpEnums.SequentialOnly:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("slice_sequential",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("slice_out_of_order",), type=RangeType.STRING)
+                )
+
+            if media.bitrate_kbits > 0:
+                capabilities[CapTransportBitRate] = Capability(
+                    CapTransportBitRate,
+                    RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
+                )
+
+        elif media.encoding_name == MatroxSdpEnums.EncodingH264:
+
+            profile, level = get_h264_profile_level_from_sdp(media.codec_profile_level_id)
+
+            if profile:
+                capabilities[CapFormatProfile] = Capability(
+                    CapFormatProfile,
+                    RangeValue(values=(profile,), type=RangeType.STRING)
+                )
+
+            if level:
+                capabilities[CapFormatLevel] = Capability(
+                    CapFormatLevel,
+                    RangeValue(values=(level,), type=RangeType.STRING)
+                )
+
+            if media.h264_packetization_mode == 0:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("single_nal_unit",), type=RangeType.STRING)
+                )
+            elif media.h264_packetization_mode == 1:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("non_interleaved_nal_units",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("interleaved_nal_units",), type=RangeType.STRING)
+                )
+
+            if media.h264_parameter_sets == "":
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("in_band",), type=RangeType.STRING)
+                )
+            elif media.h264_parameter_sets.has_suffix(","):
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("in_and_out_of_band",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("out_of_band",), type=RangeType.STRING)
+                )
+
+            if media.bitrate_kbits > 0:
+                capabilities[CapTransportBitRate] = Capability(
+                    CapTransportBitRate,
+                    RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
+                )
+
+        elif media.encoding_name == MatroxSdpEnums.EncodingH265:
+
+            tier_flag = 0
+            if media.h265_tier_flag:
+                tier_flag = 1
+
+            profile, level, progressive = get_h265_profile_level_from_sdp(media.h265_profile_space, media.h265_profile_id, tier_flag, media.h265_level_id, media.h265_profile_compatibility_indicator, media.h265_interop_constraints)
+
+            if profile:
+                capabilities[CapFormatProfile] = Capability(
+                    CapFormatProfile,
+                    RangeValue(values=(profile,), type=RangeType.STRING)
+                )
+
+            if level:
+                capabilities[CapFormatLevel] = Capability(
+                    CapFormatLevel,
+                    RangeValue(values=(level,), type=RangeType.STRING)
+                )
+
+            if progressive:
+                capabilities[CapFormatInterlaceMode] = Capability(
+                    CapFormatInterlaceMode,
+                    RangeValue(values=("progressive",), type=RangeType.STRING)
+                )
+
+            if media.h26x_max_don_diff > 0:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("interleaved_nal_units",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("non_interleaved_nal_units",), type=RangeType.STRING)
+                )
+
+            if media.h265_vps == "" and media.h265_sps == "" and media.h265_pps == "":
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("in_band",), type=RangeType.STRING)
+                )
+            elif media.h265_vps.has_suffix(",") or media.h265_sps.has_suffix(",") or media.h265_pps.has_suffix(","):
+
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("in_and_out_of_band",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("out_of_band",), type=RangeType.STRING)
+                )
+
+            if media.bitrate_kbits > 0:
+                capabilities[CapTransportBitRate] = Capability(
+                    CapTransportBitRate,
+                    RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
+                )
+
+        else:
+            raise ValueError("Unsupported encoding name: {}".format(media.encoding_name.s))
 
     def _add_audio_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add audio-specific capabilities"""
@@ -366,63 +503,209 @@ class SdpToCapabilitiesConverter:
                 RangeValue(values=(sample_rate,), type=RangeType.RATIONAL)
             )
 
-        # Sample depth (infer from format)
-        if media.encoding_name:
-            encoding = media.encoding_name.name if hasattr(media.encoding_name, 'name') else str(media.encoding_name)
-            if encoding.startswith('L'):
-                try:
-                    # Extract bit depth from encoding name like "L24", "L16"
-                    depth = int(encoding[1:])
-                    capabilities[CapFormatSampleDepth] = Capability(
-                        CapFormatSampleDepth,
-                        RangeValue(values=(depth,), type=RangeType.INT)
+        if media.bitrate_kbits > 0:
+            capabilities[CapTransportBitRate] = Capability(
+                CapTransportBitRate,
+                RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
+            )
+
+        if media.encoding_name == MatroxSdpEnums.EncodingL8 or media.encoding_name == MatroxSdpEnums.EncodingL16 or media.encoding_name == MatroxSdpEnums.EncodingL20 or media.encoding_name == MatroxSdpEnums.EncodingL24:
+            try:
+                # Extract bit depth from encoding name like "L24", "L16"
+                depth = int(media.encoding_name[1:])
+                capabilities[CapFormatSampleDepth] = Capability(
+                    CapFormatSampleDepth,
+                    RangeValue(values=(depth,), type=RangeType.INT)
+                )
+            except ValueError:
+                pass
+
+            # Packet time
+            if media.p_time_us > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                )
+
+            if media.max_p_time_us > 0:
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                )
+
+        elif media.encoding_name == MatroxSdpEnums.EncodingAM824:
+
+            # Packet time
+            if media.p_time_us > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                )
+
+            if media.max_p_time_us > 0:
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                )
+
+        elif media.encoding_name == MatroxSdpEnums.EncodingAAC:
+
+            profile, level = get_aac_profile_level_from_sdp(media.codec_profile_level_id)
+            
+            if profile:
+                capabilities[CapFormatProfile] = Capability(
+                    CapFormatProfile,
+                    RangeValue(values=(profile,), type=RangeType.STRING)
+                )
+
+            if level:
+                capabilities[CapFormatLevel] = Capability(
+                    CapFormatLevel,
+                    RangeValue(values=(level,), type=RangeType.STRING)
+                )
+
+            if media.aac_bitrate != 0:
+                capabilities[CapFormatBitRate] = Capability(
+					CapFormatBitRate,
+					RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT) # in Kbps
+				)
+    
+            if media.aac_max_displacement > 0:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("interleaved_access_units",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("non_interleaved_access_units",), type=RangeType.STRING)
+                )
+
+            if media.aac_config == "":
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("in_band",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("out_of_band",), type=RangeType.STRING)
+                )
+
+            # RFC 6416 Packet time
+            if media.p_time_us > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                )
+
+            if media.max_p_time_us > 0:
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                )
+
+            # RFC 3640 Packet time
+            if media.aac_constant_duration > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
+                )
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
+                )
+
+        elif media.encoding_name == MatroxSdpEnums.EncodingAAC_LATM or media.encoding_name == MatroxSdpEnums.EncodingAAC_ADTS:
+
+            profile, level = get_aac_profile_level_from_sdp(media.codec_profile_level_id)
+            
+            if profile:
+                capabilities[CapFormatProfile] = Capability(
+                    CapFormatProfile,
+                    RangeValue(values=(profile,), type=RangeType.STRING)
+                )
+
+            if level:
+                capabilities[CapFormatLevel] = Capability(
+                    CapFormatLevel,
+                    RangeValue(values=(level,), type=RangeType.STRING)
+                )
+
+            if media.aac_bitrate != 0:
+                capabilities[CapFormatBitRate] = Capability(
+					CapFormatBitRate,
+					RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT) # in Kbps
+				)
+    
+            if media.aac_max_displacement > 0:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("interleaved_access_units",), type=RangeType.STRING)
+                )
+            else:
+                capabilities[CapTransportPacketTransmissionMode] = Capability(
+                    CapTransportPacketTransmissionMode,
+                    RangeValue(values=("non_interleaved_access_units",), type=RangeType.STRING)
+                )
+
+            if media.aac_config_present == False:
+                if media.aac_config == "":
+                    capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                        CapTransportParameterSetsTransportMode,
+                        RangeValue(values=("in_band",), type=RangeType.STRING)
                     )
-                except ValueError:
-                    pass
+                else:
+                    capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                        CapTransportParameterSetsTransportMode,
+                        RangeValue(values=("in_and_out_of_band",), type=RangeType.STRING)
+                    )
+            else:
+                capabilities[CapTransportParameterSetsTransportMode] = Capability(
+                    CapTransportParameterSetsTransportMode,
+                    RangeValue(values=("out_of_band",), type=RangeType.STRING)
+                )
 
-        # Packet time
-        if media.p_time_us > 0:
-            packet_time_ms = media.p_time_us / 1000.0  # Convert microseconds to milliseconds
-            capabilities[CapTransportPacketTime] = Capability(
-                CapTransportPacketTime,
-                RangeValue(values=(packet_time_ms,), type=RangeType.FLOAT)
-            )
+            # RFC 6416 Packet time
+            if media.p_time_us > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                )
 
-        if media.max_p_time_us > 0:
-            max_packet_time_ms = media.max_p_time_us / 1000.0
-            capabilities[CapTransportMaxPacketTime] = Capability(
-                CapTransportMaxPacketTime,
-                RangeValue(values=(max_packet_time_ms,), type=RangeType.FLOAT)
-            )
+            if media.max_p_time_us > 0:
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                )
+
+            # RFC 3640 Packet time
+            if media.aac_constant_duration > 0:
+                capabilities[CapTransportPacketTime] = Capability(
+                    CapTransportPacketTime,
+                    RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
+                )
+                capabilities[CapTransportMaxPacketTime] = Capability(
+                    CapTransportMaxPacketTime,
+                    RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
+                )
+        else: 
+            raise ValueError("Unsupported encoding name: {}".format(media.encoding_name.s))
 
     def _add_data_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add data-specific capabilities"""
-        # For ST 2110-40 ancillary data
-        if media.did_sdid:
-            # This would typically map to event_type for data streams
-            pass
+        pass
+
+    def _add_mux_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
+        """Add mux-specific capabilities"""
+        pass
 
     def _add_transport_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
-        """Add transport-specific capabilities"""
-        # Bit rate
-        if media.bitrate_kbits > 0:
-            bitrate_bps = media.bitrate_kbits * 1000  # Convert kbps to bps
-            capabilities[CapTransportBitRate] = Capability(
-                CapTransportBitRate,
-                RangeValue(values=(bitrate_bps,), type=RangeType.INT)
-            )
-
-        # Packet transmission mode
-        if media.packing_mode:
-            packing_mode = media.packing_mode.name if hasattr(media.packing_mode, 'name') else str(media.packing_mode)
-            capabilities[CapTransportPacketTransmissionMode] = Capability(
-                CapTransportPacketTransmissionMode,
-                RangeValue(values=(packing_mode,), type=RangeType.STRING)
-            )
+        """Add some basic transport-specific capabilities"""
 
         # ST 2110-21 sender type
         if media.sender_type:
-            sender_type = media.sender_type.name if hasattr(media.sender_type, 'name') else str(media.sender_type)
+            sender_type = str(media.sender_type)
             capabilities[CapTransport_ST2110_21_SenderType] = Capability(
                 CapTransport_ST2110_21_SenderType,
                 RangeValue(values=(sender_type,), type=RangeType.STRING)
@@ -442,16 +725,28 @@ class SdpToCapabilitiesConverter:
                 RangeValue(values=(True,), type=RangeType.BOOL)
             )
 
-        # Channel order for audio
-        if media.channel_order:
-            capabilities[CapTransportChannelOrder] = Capability(
-                CapTransportChannelOrder,
-                RangeValue(values=(media.channel_order,), type=RangeType.STRING)
+        # Get clock, HDCP and Privacy information
+        if media.media_clock_type == MatroxSdpEnums.Sender:
+            capabilities[CapTransportSynchronousMedia] = Capability(
+                CapTransportSynchronousMedia,
+                RangeValue(values=(False,), type=RangeType.BOOL)
+            )
+        else:
+            capabilities[CapTransportSynchronousMedia] = Capability(
+                CapTransportSynchronousMedia,
+                RangeValue(values=(True,), type=RangeType.BOOL)
             )
 
-    def _add_ipmx_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
-        """Add IPMX-specific capabilities"""
-        pass
+        if media.ts_ref_clock_source == MatroxSdpEnums.PTP:
+            capabilities[CapTransportClockRefType] = Capability(
+                CapTransportClockRefType,
+                RangeValue(values=("ptp",), type=RangeType.STRING)
+            )
+        else:
+            capabilities[CapTransportClockRefType] = Capability(
+                CapTransportClockRefType,
+                RangeValue(values=("internal",), type=RangeType.STRING)
+            )
 
 
 def convert_sdp_file_to_capabilities(sdp_file_path: str) -> Caps:

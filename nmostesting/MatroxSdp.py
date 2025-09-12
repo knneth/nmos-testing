@@ -30,6 +30,58 @@ uint = int
 uint64 = int
 float64 = float
 
+# H.265 Constraint flags (48-bit values)
+GENERAL_PROGRESSIVE_SOURCE_FLAG = 1 << 47           # used to express interlaced versus progressive
+GENERAL_INTERLACED_SOURCE_FLAG = 1 << 46            # used to express interlaced versus progressive  
+GENERAL_NON_PACKED_CONSTRAINT_FLAG = 1 << 45        # set to 1 by default
+GENERAL_FRAME_ONLY_CONSTRAINT_FLAG = 1 << 44        # set to 1 if progressive_source_flag is 1, 0 otherwise
+
+GENERAL_MAX_12BIT_CONSTRAINT_FLAG = 1 << 43
+GENERAL_MAX_10BIT_CONSTRAINT_FLAG = 1 << 42
+GENERAL_MAX_8BIT_CONSTRAINT_FLAG = 1 << 41
+GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG = 1 << 40
+GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG = 1 << 39
+GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG = 1 << 38
+GENERAL_INTRA_CONSTRAINT_FLAG = 1 << 37
+GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG = 1 << 36
+GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG = 1 << 35
+
+GENERAL_MAX_14BIT_CONSTRAINT_FLAG = 1 << 34
+GENERAL_INBLD_FLAG = 1 << 0
+
+PROFILE_CONSTRAINTS_MASK = (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                           GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                           GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                           GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                           GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                           GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                           GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                           GENERAL_INTRA_CONSTRAINT_FLAG |
+                           GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG |
+                           GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG)
+
+PROFILE_CONSTRAINTS_INTRA_MASK = (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                 GENERAL_INTRA_CONSTRAINT_FLAG |
+                                 GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG)
+                                 # GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG excluded
+
+PROFILE_CONSTRAINTS_STILL_MASK = (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                 GENERAL_INTRA_CONSTRAINT_FLAG |
+                                 GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG)
+                                 # GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG excluded
+
 # TargetSpecification Enum (simulating Go's iota-based enum)
 class TargetSpecification(Enum):
     NONE = 0
@@ -237,6 +289,128 @@ class MatroxSdpEnums(Enum):
     H265TxModeSRST = EnumId("SRST")
     H265TxModeMRST = EnumId("MRST")
     H265TxModeMRMT = EnumId("MRMT")
+    
+    # H.265 Profiles
+    H265ProfileMain10 = EnumId("Main10")
+    H265ProfileMain10StillPicture = EnumId("Main10StillPicture")
+    H265ProfileMainStillPicture = EnumId("MainStill")
+    H265ProfileMonochrome = EnumId("Monochrome")
+    H265ProfileMonochrome10 = EnumId("Monochrome10")
+    H265ProfileMonochrome12 = EnumId("Monochrome12")
+    H265ProfileMonochrome16 = EnumId("Monochrome16")
+    H265ProfileMain12 = EnumId("Main12")
+    H265ProfileMain10_422 = EnumId("Main10-422")
+    H265ProfileMain12_422 = EnumId("Main12-422")
+    H265ProfileMain_444 = EnumId("Main444")
+    H265ProfileMain10_444 = EnumId("Main10-444")
+    H265ProfileMain12_444 = EnumId("Main12-444")
+    H265ProfileMainIntra = EnumId("MainIntra")
+    H265ProfileMain10Intra = EnumId("Main10Intra")
+    H265ProfileMain12Intra = EnumId("Main12Intra")
+    H265ProfileMain10Intra_422 = EnumId("Main10Intra-422")
+    H265ProfileMain12Intra_422 = EnumId("Main12Intra-422")
+    H265ProfileMainIntra_444 = EnumId("MainIntra-444")
+    H265ProfileMain10Intra_444 = EnumId("Main10Intra-444")
+    H265ProfileMain12Intra_444 = EnumId("Main12Intra-444")
+    H265ProfileMain16Intra_444 = EnumId("Main16Intra-444")
+    H265ProfileMainStillPicture_444 = EnumId("MainStillPicture-444")
+    H265ProfileMain16StillPicture_444 = EnumId("Main16StillPicture-444")
+    H265ProfileHighThroughput_444 = EnumId("HighThroughput-444")
+    H265ProfileHighThroughput10_444 = EnumId("HighThroughput10-444")
+    H265ProfileHighThroughput14_444 = EnumId("HighThroughput14-444")
+    H265ProfileHighThroughput16Intra_444 = EnumId("HighThroughput16Intra-444")
+    H265ProfileScreenExtendedMain = EnumId("ScreenExtendedMain")
+    H265ProfileScreenExtendedMain10 = EnumId("ScreenExtendedMain10")
+    H265ProfileScreenExtendedMain_444 = EnumId("ScreenExtendedMain-444")
+    H265ProfileScreenExtendedMain10_444 = EnumId("ScreenExtendedMain10-444")
+    H265ProfileScreenExtendedHighThroughput_444 = EnumId("ScreenExtendedHighThroughput-444")
+    H265ProfileScreenExtendedHighThroughput10_444 = EnumId("ScreenExtendedHighThroughput10-444")
+    H265ProfileScreenExtendedHighThroughput14_444 = EnumId("ScreenExtendedHighThroughput14-444")
+    
+    # H.265 Levels
+    H265LevelMain1 = EnumId("Main-1")
+    H265LevelMain2 = EnumId("Main-2")
+    H265LevelMain2_1 = EnumId("Main-2.1")
+    H265LevelMain3 = EnumId("Main-3")
+    H265LevelMain3_1 = EnumId("Main-3.1")
+    H265LevelMain4 = EnumId("Main-4")
+    H265LevelMain4_1 = EnumId("Main-4.1")
+    H265LevelMain5 = EnumId("Main-5")
+    H265LevelMain5_1 = EnumId("Main-5.1")
+    H265LevelMain5_2 = EnumId("Main-5.2")
+    H265LevelMain6 = EnumId("Main-6")
+    H265LevelMain6_1 = EnumId("Main-6.1")
+    H265LevelMain6_2 = EnumId("Main-6.2")
+    H265LevelHigh1 = EnumId("High-1")
+    H265LevelHigh2 = EnumId("High-2")
+    H265LevelHigh2_1 = EnumId("High-2.1")
+    H265LevelHigh3 = EnumId("High-3")
+    H265LevelHigh3_1 = EnumId("High-3.1")
+    H265LevelHigh4 = EnumId("High-4")
+    H265LevelHigh4_1 = EnumId("High-4.1")
+    H265LevelHigh5 = EnumId("High-5")
+    H265LevelHigh5_1 = EnumId("High-5.1")
+    H265LevelHigh5_2 = EnumId("High-5.2")
+    H265LevelHigh6 = EnumId("High-6")
+    H265LevelHigh6_1 = EnumId("High-6.1")
+    H265LevelHigh6_2 = EnumId("High-6.2")
+    H265LevelHigh8_5 = EnumId("High-8.5")
+    
+    # H.264 Profiles
+    H264ProfileBaseline = EnumId("Baseline")
+    H264ProfileBaselineConstrained = EnumId("BaselineConstrained")
+    CodecProfileMain = EnumId("Main")
+    H264ProfileExtended = EnumId("Extended")
+    H264ProfileHigh = EnumId("High")
+    H264ProfileHighProgressive = EnumId("HighProgressive")
+    H264ProfileHighConstrained = EnumId("HighConstrained")
+    H264ProfileHigh10 = EnumId("High10")
+    H264ProfileHigh10Progressive = EnumId("High10Progressive")
+    H264ProfileHigh10Intra = EnumId("High10Intra")
+    H264ProfileHigh_422 = EnumId("High-422")
+    H264ProfileHighIntra_422 = EnumId("HighIntra-422")
+    H264ProfileHighPredictive_444 = EnumId("HighPredictive-444")
+    H264ProfileHighIntra_444 = EnumId("HighIntra-444")
+    H264ProfileCAVLCIntra_444 = EnumId("CAVLCIntra-444")
+    
+    # AAC Profiles
+    AacProfileSpeech = EnumId("Speech")
+    AacProfileSynthetic = EnumId("Synthetic")
+    AacProfileScalable = EnumId("Scalable")
+    AacProfileHighQuality = EnumId("HighQuality")
+    AacProfileLowDelay = EnumId("LowDelay")
+    AacProfileNatural = EnumId("Natural")
+    AacProfileMobile = EnumId("Mobile")
+    AacProfileAAC = EnumId("AAC")
+    AacProfileHighEfficiencyAAC = EnumId("HighEfficiencyAAC")
+    AacProfileHighEfficiencyAACv2 = EnumId("HighEfficiencyAACv2")
+    AacProfileLowDelayAAC = EnumId("LowDelayAAC")
+    AacProfileLowDelayAACv2 = EnumId("LowDelayAACv2")
+    AacProfileExtendedHighEfficiencyAAC = EnumId("ExtendedHighEfficiencyAAC")
+    
+    # H.264/H.265 Codec Levels
+    CodecLevel1b = EnumId("1b")
+    CodecLevel1 = EnumId("1")
+    CodecLevel1_1 = EnumId("1.1")
+    CodecLevel1_2 = EnumId("1.2")
+    CodecLevel1_3 = EnumId("1.3")
+    CodecLevel2 = EnumId("2")
+    CodecLevel2_1 = EnumId("2.1")
+    CodecLevel2_2 = EnumId("2.2")
+    CodecLevel3 = EnumId("3")
+    CodecLevel3_1 = EnumId("3.1")
+    CodecLevel3_2 = EnumId("3.2")
+    CodecLevel4 = EnumId("4")
+    CodecLevel4_1 = EnumId("4.1")
+    CodecLevel4_2 = EnumId("4.2")
+    CodecLevel5 = EnumId("5")
+    CodecLevel5_1 = EnumId("5.1")
+    CodecLevel5_2 = EnumId("5.2")
+    CodecLevel6 = EnumId("6")
+    CodecLevel6_1 = EnumId("6.1")
+    CodecLevel6_2 = EnumId("6.2")
+    CodecLevel7 = EnumId("7")
+    CodecLevel8 = EnumId("8")
 
 def init_enums():
     global ALL_ENUMS
@@ -1792,4 +1966,643 @@ class MatroxSdp:
             if not self.secondary_media.rtcp_port and self.secondary_media.port:
                 self.secondary_media.rtcp_port = self.secondary_media.port + 1
         return None
+
+
+def get_h264_profile_level_from_sdp(profile_level_id: str) -> Tuple[EnumId, EnumId]:
+    """
+    Convert H.264 profile-level-id string to profile and level enums.
+    
+    Args:
+        profile_level_id: Hexadecimal string representing profile-level-id
+        
+    Returns:
+        Tuple of (profile, level) as EnumId objects
+        
+    Raises:
+        SdpError: If profile_level_id is invalid
+    """
+    try:
+        # Parse as 24-bit hexadecimal value
+        value = int(profile_level_id, 16)
+        if value > 0xFFFFFF:  # Ensure it fits in 24 bits
+            raise ValueError("Value exceeds 24-bit range")
+    except ValueError as e:
+        raise SdpError(f"invalid profile-level-id value: {e}")
+    
+    # Extract components: profile_idc : profile-iop : level_idc
+    profile_idc = uint8((value >> 16) & 255)
+    profile_iop = uint8((value >> 8) & 255)  # 0x80(set0), 0x40(set1), 0x20(set2), 0x10(set3), 0x08(set4), 0x04(set5)
+    level_idc = uint8(value & 255)
+    
+    # Determine level based on level_idc
+    if level_idc == 9:
+        level = MatroxSdpEnums.CodecLevel1b
+    elif level_idc == 10:
+        level = MatroxSdpEnums.CodecLevel1
+    elif level_idc == 11:
+        if profile_idc == 0x42 or profile_idc == 0x4d or profile_idc == 0x58:
+            level = MatroxSdpEnums.CodecLevel1b
+        else:
+            level = MatroxSdpEnums.CodecLevel1_1
+    elif level_idc == 12:
+        level = MatroxSdpEnums.CodecLevel1_2
+    elif level_idc == 13:
+        level = MatroxSdpEnums.CodecLevel1_3
+    elif level_idc == 20:
+        level = MatroxSdpEnums.CodecLevel2
+    elif level_idc == 21:
+        level = MatroxSdpEnums.CodecLevel2_1
+    elif level_idc == 22:
+        level = MatroxSdpEnums.CodecLevel2_2
+    elif level_idc == 30:
+        level = MatroxSdpEnums.CodecLevel3
+    elif level_idc == 31:
+        level = MatroxSdpEnums.CodecLevel3_1
+    elif level_idc == 32:
+        level = MatroxSdpEnums.CodecLevel3_2
+    elif level_idc == 40:
+        level = MatroxSdpEnums.CodecLevel4
+    elif level_idc == 41:
+        level = MatroxSdpEnums.CodecLevel4_1
+    elif level_idc == 42:
+        level = MatroxSdpEnums.CodecLevel4_2
+    elif level_idc == 50:
+        level = MatroxSdpEnums.CodecLevel5
+    elif level_idc == 51:
+        level = MatroxSdpEnums.CodecLevel5_1
+    elif level_idc == 52:
+        level = MatroxSdpEnums.CodecLevel5_2
+    elif level_idc == 60:
+        level = MatroxSdpEnums.CodecLevel6
+    elif level_idc == 61:
+        level = MatroxSdpEnums.CodecLevel6_1
+    elif level_idc == 62:
+        level = MatroxSdpEnums.CodecLevel6_2
+    else:
+        raise SdpError("invalid profile-level-id value: unknown level_idc")
+    
+    # Determine profile based on profile_idc and profile_iop
+    if profile_idc == 0x42:
+        if profile_iop == 0x40:
+            profile = MatroxSdpEnums.H264ProfileBaselineConstrained
+        else:
+            profile = MatroxSdpEnums.H264ProfileBaseline
+    elif profile_idc == 0x4d:
+        profile = MatroxSdpEnums.CodecProfileMain
+    elif profile_idc == 0x58:
+        profile = MatroxSdpEnums.H264ProfileExtended
+    elif profile_idc == 0x64:
+        if profile_iop == 0:
+            profile = MatroxSdpEnums.H264ProfileHigh
+        elif profile_iop == 0x08:
+            profile = MatroxSdpEnums.H264ProfileHighProgressive
+        elif profile_iop == (0x08 | 0x04):
+            profile = MatroxSdpEnums.H264ProfileHighConstrained
+        else:
+            raise SdpError("invalid profile-level-id value: unknown profile_iop for High profile")
+    elif profile_idc == 0x6e:
+        if profile_iop == 0:
+            profile = MatroxSdpEnums.H264ProfileHigh10
+        elif profile_iop == 0x08:
+            profile = MatroxSdpEnums.H264ProfileHigh10Progressive
+        elif profile_iop == 0x10:
+            profile = MatroxSdpEnums.H264ProfileHigh10Intra
+        else:
+            raise SdpError("invalid profile-level-id value: unknown profile_iop for High 10 profile")
+    elif profile_idc == 0x7a:
+        if profile_iop == 0:
+            profile = MatroxSdpEnums.H264ProfileHigh_422
+        elif profile_iop == 0x10:
+            profile = MatroxSdpEnums.H264ProfileHighIntra_422
+        else:
+            raise SdpError("invalid profile-level-id value: unknown profile_iop for High 4:2:2 profile")
+    elif profile_idc == 0xf4:
+        if profile_iop == 0:
+            profile = MatroxSdpEnums.H264ProfileHighPredictive_444
+        elif profile_iop == 0x10:
+            profile = MatroxSdpEnums.H264ProfileHighIntra_444
+        else:
+            raise SdpError("invalid profile-level-id value: unknown profile_iop for High 4:4:4 profile")
+    elif profile_idc == 0x2c:
+        profile = MatroxSdpEnums.H264ProfileCAVLCIntra_444
+    else:
+        raise SdpError("invalid profile-level-id value: unknown profile_idc")
+    
+    return profile.value, level.value
+
+
+def get_h265_profile_level_from_sdp(profile_space: uint8, profile_id: uint8, tier_flag: uint8, level_id: uint8, 
+                                   profile_compatibility: str, interop_constraints: str) -> Tuple[EnumId, EnumId, bool]:
+    """
+    Convert H.265 profile parameters to profile and level enums.
+    
+    Args:
+        profile_space: Profile space (must be 0)
+        profile_id: Profile ID (1-11)  
+        tier_flag: Tier flag (0=Main, 1=High)
+        level_id: Level ID (30-255)
+        profile_compatibility: Profile compatibility indicator (hex string)
+        interop_constraints: Interop constraints (48-bit hex string)
+        
+    Returns:
+        Tuple of (profile, level, progressive) as (EnumId, EnumId, bool)
+        
+    Raises:
+        SdpError: If any parameter is invalid
+    """
+    progressive = False
+    
+    if profile_space != 0:
+        raise SdpError("invalid profile_space value")
+    
+    # Parse interop constraints as 48-bit hex value
+    try:
+        constraints = int(interop_constraints, 16)
+        if constraints > 0xFFFFFFFFFFFF:  # Ensure it fits in 48 bits
+            raise ValueError("Value exceeds 48-bit range")
+    except ValueError as e:
+        raise SdpError(f"invalid interop_constraints value: {e}")
+    
+    # Check for progressive content
+    if ((constraints & GENERAL_PROGRESSIVE_SOURCE_FLAG) != 0 and 
+        (constraints & GENERAL_FRAME_ONLY_CONSTRAINT_FLAG) != 0):
+        progressive = True
+    
+    # Determine profile based on profile_id and constraint flags
+    if profile_id == 1:
+        profile = MatroxSdpEnums.CodecProfileMain  # do not check compatibility flags
+        
+    elif profile_id == 2:
+        if (constraints & GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG) != 0:
+            profile = MatroxSdpEnums.H265ProfileMain10StillPicture
+        else:
+            profile = MatroxSdpEnums.H265ProfileMain10
+            
+    elif profile_id == 3:
+        profile = MatroxSdpEnums.H265ProfileMainStillPicture
+        
+    elif profile_id == 4:
+        # Complex constraint-based profile determination for profile_id == 4
+        constraints_masked = constraints & PROFILE_CONSTRAINTS_MASK
+        constraints_intra_masked = constraints & PROFILE_CONSTRAINTS_INTRA_MASK
+        constraints_still_masked = constraints & PROFILE_CONSTRAINTS_STILL_MASK
+        
+        # Check each profile pattern - order matters for fallback logic
+        if constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                 GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMonochrome
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMonochrome10
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMonochrome12
+            
+        elif constraints_masked == (GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_MONOCHROME_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMonochrome16
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain10_422
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12_422
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain_444
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain10_444
+            
+        elif constraints_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12_444
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMainIntra
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain10Intra
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12Intra
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain10Intra_422
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12Intra_422
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMainIntra_444
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain10Intra_444
+            
+        elif constraints_intra_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain12Intra_444
+            
+        elif constraints_intra_masked == GENERAL_INTRA_CONSTRAINT_FLAG:
+            profile = MatroxSdpEnums.H265ProfileMain16Intra_444
+            
+        elif constraints_still_masked == (GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                         GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                         GENERAL_INTRA_CONSTRAINT_FLAG |
+                                         GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMainStillPicture_444
+            
+        elif constraints_still_masked == (GENERAL_INTRA_CONSTRAINT_FLAG |
+                                         GENERAL_ONE_PICTURE_ONLY_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileMain16StillPicture_444
+        else:
+            raise SdpError("invalid interop_constraints value")
+            
+    elif profile_id == 5:
+        constraints_masked = constraints & PROFILE_CONSTRAINTS_MASK
+        constraints_intra_masked = constraints & PROFILE_CONSTRAINTS_INTRA_MASK
+        
+        if constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileHighThroughput_444
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileHighThroughput10_444
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileHighThroughput14_444
+            
+        elif constraints_intra_masked == GENERAL_INTRA_CONSTRAINT_FLAG:
+            profile = MatroxSdpEnums.H265ProfileHighThroughput16Intra_444
+        else:
+            raise SdpError("invalid interop_constraints value")
+            
+    elif profile_id == 9:
+        constraints_masked = constraints & PROFILE_CONSTRAINTS_MASK
+        
+        if constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                 GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedMain
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_422CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_420CHROMA_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedMain10
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedMain_444
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedMain10_444
+        else:
+            raise SdpError("invalid interop_constraints value")
+            
+    elif profile_id == 11:
+        constraints_masked = constraints & PROFILE_CONSTRAINTS_MASK
+        
+        if constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                 GENERAL_MAX_8BIT_CONSTRAINT_FLAG |
+                                 GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedHighThroughput_444
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_12BIT_CONSTRAINT_FLAG |
+                                   GENERAL_MAX_10BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedHighThroughput10_444
+            
+        elif constraints_masked == (GENERAL_MAX_14BIT_CONSTRAINT_FLAG |
+                                   GENERAL_LOWER_BIT_RATE_CONSTRAINT_FLAG):
+            profile = MatroxSdpEnums.H265ProfileScreenExtendedHighThroughput14_444
+        else:
+            raise SdpError("invalid interop_constraints value")
+    else:
+        raise SdpError("invalid profile")
+    
+    # Determine level based on tier_flag and level_id
+    if tier_flag == 0:  # Main tier
+        if level_id == 30:
+            level = MatroxSdpEnums.H265LevelMain1
+        elif level_id == 60:
+            level = MatroxSdpEnums.H265LevelMain2
+        elif level_id == 63:
+            level = MatroxSdpEnums.H265LevelMain2_1
+        elif level_id == 90:
+            level = MatroxSdpEnums.H265LevelMain3
+        elif level_id == 93:
+            level = MatroxSdpEnums.H265LevelMain3_1
+        elif level_id == 120:
+            level = MatroxSdpEnums.H265LevelMain4
+        elif level_id == 123:
+            level = MatroxSdpEnums.H265LevelMain4_1
+        elif level_id == 150:
+            level = MatroxSdpEnums.H265LevelMain5
+        elif level_id == 153:
+            level = MatroxSdpEnums.H265LevelMain5_1
+        elif level_id == 156:
+            level = MatroxSdpEnums.H265LevelMain5_2
+        elif level_id == 180:
+            level = MatroxSdpEnums.H265LevelMain6
+        elif level_id == 183:
+            level = MatroxSdpEnums.H265LevelMain6_1
+        elif level_id == 186:
+            level = MatroxSdpEnums.H265LevelMain6_2
+        else:
+            raise SdpError("invalid tier_flag or level_id")
+    else:  # High tier
+        if level_id == 30:
+            level = MatroxSdpEnums.H265LevelHigh1
+        elif level_id == 60:
+            level = MatroxSdpEnums.H265LevelHigh2
+        elif level_id == 63:
+            level = MatroxSdpEnums.H265LevelHigh2_1
+        elif level_id == 90:
+            level = MatroxSdpEnums.H265LevelHigh3
+        elif level_id == 93:
+            level = MatroxSdpEnums.H265LevelHigh3_1
+        elif level_id == 120:
+            level = MatroxSdpEnums.H265LevelHigh4
+        elif level_id == 123:
+            level = MatroxSdpEnums.H265LevelHigh4_1
+        elif level_id == 150:
+            level = MatroxSdpEnums.H265LevelHigh5
+        elif level_id == 153:
+            level = MatroxSdpEnums.H265LevelHigh5_1
+        elif level_id == 156:
+            level = MatroxSdpEnums.H265LevelHigh5_2
+        elif level_id == 180:
+            level = MatroxSdpEnums.H265LevelHigh6
+        elif level_id == 183:
+            level = MatroxSdpEnums.H265LevelHigh6_1
+        elif level_id == 186:
+            level = MatroxSdpEnums.H265LevelHigh6_2
+        elif level_id == 255:
+            level = MatroxSdpEnums.H265LevelHigh8_5
+        else:
+            raise SdpError("invalid tier_flag or level_id")
+    
+    return profile.value, level.value, progressive
+
+
+def get_aac_profile_level_from_sdp(profile_level_id: str) -> Tuple[EnumId, EnumId]:
+    """
+    Convert AAC profile-level-id string to profile and level enums.
+    
+    Args:
+        profile_level_id: Decimal string representing profile-level-id (1-52)
+        
+    Returns:
+        Tuple of (profile, level) as EnumId objects
+        
+    Raises:
+        SdpError: If profile_level_id is invalid
+    """
+    try:
+        # Parse as decimal value (24-bit max)
+        value = int(profile_level_id, 10)
+        if value > 0xFFFFFF:  # Ensure it fits in 24 bits
+            raise ValueError("Value exceeds 24-bit range")
+    except ValueError as e:
+        raise SdpError(f"invalid profile-level-id value: {e}")
+    
+    # Map profile-level-id values to profile and level combinations
+    if value == 1:
+        profile = MatroxSdpEnums.CodecProfileMain
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 2:
+        profile = MatroxSdpEnums.CodecProfileMain
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 3:
+        profile = MatroxSdpEnums.CodecProfileMain
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 4:
+        profile = MatroxSdpEnums.CodecProfileMain
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 5:
+        profile = MatroxSdpEnums.AacProfileScalable
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 6:
+        profile = MatroxSdpEnums.AacProfileScalable
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 7:
+        profile = MatroxSdpEnums.AacProfileScalable
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 8:
+        profile = MatroxSdpEnums.AacProfileScalable
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 9:
+        profile = MatroxSdpEnums.AacProfileSpeech
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 10:
+        profile = MatroxSdpEnums.AacProfileSpeech
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 11:
+        profile = MatroxSdpEnums.AacProfileSynthetic
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 12:
+        profile = MatroxSdpEnums.AacProfileSynthetic
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 13:
+        profile = MatroxSdpEnums.AacProfileSynthetic
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 14:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 15:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 16:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 17:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 18:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 19:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel6
+    elif value == 20:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel7
+    elif value == 21:
+        profile = MatroxSdpEnums.AacProfileHighQuality
+        level = MatroxSdpEnums.CodecLevel8
+    elif value == 22:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 23:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 24:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 25:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 26:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 27:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel6
+    elif value == 28:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel7
+    elif value == 29:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel8
+    elif value == 30:
+        profile = MatroxSdpEnums.AacProfileNatural
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 31:
+        profile = MatroxSdpEnums.AacProfileNatural
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 32:
+        profile = MatroxSdpEnums.AacProfileNatural
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 33:
+        profile = MatroxSdpEnums.AacProfileNatural
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 34:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 35:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 36:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 37:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 38:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 39:
+        profile = MatroxSdpEnums.AacProfileMobile
+        level = MatroxSdpEnums.CodecLevel6
+    elif value == 40:
+        profile = MatroxSdpEnums.AacProfileAAC
+        level = MatroxSdpEnums.CodecLevel1
+    elif value == 41:
+        profile = MatroxSdpEnums.AacProfileAAC
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 42:
+        profile = MatroxSdpEnums.AacProfileAAC
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 43:
+        profile = MatroxSdpEnums.AacProfileAAC
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 44:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 45:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 46:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 47:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 48:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel2
+    elif value == 49:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel3
+    elif value == 50:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel4
+    elif value == 51:
+        profile = MatroxSdpEnums.AacProfileHighEfficiencyAAC
+        level = MatroxSdpEnums.CodecLevel5
+    elif value == 52:
+        profile = MatroxSdpEnums.AacProfileLowDelay
+        level = MatroxSdpEnums.CodecLevel1
+    else:
+        raise SdpError("invalid profile-level-id value")
+    
+    return profile.value, level.value
 
