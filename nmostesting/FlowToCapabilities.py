@@ -174,11 +174,10 @@ class FlowToCapabilitiesConverter:
                                                               else None, type=RangeType.INT))
 
         layer = flow.get("urn:x-matrox:layer", None)
-        format = None
+        format = FormatVideo
 
-        if layer is not None:
-            format = FormatVideo
-
+        if layer is None:
+            format = None
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
                                                             RangeValue(values=(synchronous_media,)
                                                                        if synchronous_media is not None
@@ -296,10 +295,10 @@ class FlowToCapabilitiesConverter:
                                                         else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
-        format = None
+        format = FormatVideo
 
-        if layer is not None:
-            format = FormatVideo
+        if layer is None:
+            format = None
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
                                                             RangeValue(values=(synchronous_media,),
                                                                        type=RangeType.BOOL))
@@ -400,10 +399,10 @@ class FlowToCapabilitiesConverter:
                                                      else None, type=RangeType.STRING))
 
         layer = flow.get("urn:x-matrox:layer", None)
-        format = None
+        format = FormatAudio
 
-        if layer is not None:
-            format = FormatAudio
+        if layer is None:
+            format = None
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
                                                             RangeValue(values=(synchronous_media,),
                                                                        type=RangeType.BOOL))
@@ -498,10 +497,10 @@ class FlowToCapabilitiesConverter:
                                                            else None, type=RangeType.INT))
 
         layer = flow.get("urn:x-matrox:layer", None)
-        format = None
+        format = FormatAudio
 
-        if layer is not None:
-            format = FormatAudio
+        if layer is None:
+            format = None
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
                                                             RangeValue(values=(synchronous_media,),
                                                                        type=RangeType.BOOL))
@@ -555,10 +554,10 @@ class FlowToCapabilitiesConverter:
         synchronous_media, clock_name = self._require_data_source(source)
 
         layer = flow.get("urn:x-matrox:layer", None)
-        format = None
+        format = FormatData
 
-        if layer is not None:
-            format = FormatData
+        if layer is None:
+            format = None
             caps[CapTransportSynchronousMedia] = Capability(CapTransportSynchronousMedia,
                                                             RangeValue(values=(synchronous_media,),
                                                                        type=RangeType.BOOL))
