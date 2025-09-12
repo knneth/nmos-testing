@@ -68,6 +68,8 @@ from ..MatroxSdpCheck import check_sdp_st2110_22
 from ..MatroxSdpCheck import check_sdp_rfc3551
 from ..MatroxSdpCheck import check_sdp_st2110_30
 from ..MatroxSdpCheck import check_sdp_st2110_31
+from ..MatroxSdpCheck import check_sdp_rfc6184
+from ..MatroxSdpCheck import check_sdp_rfc7798
 
 # Import SDP to CCF capabilities converter
 from ..SdpToCapabilities import SdpToCapabilitiesConverter
@@ -349,7 +351,17 @@ class MatroxSdpTest(GenericTest):
                                   and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
                                   and flow_map[sender["flow_id"]]["media_type"] == "video/jxsv"]
 
-            video_senders = raw_video_senders + jxsv_video_senders
+            h265_video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                                  and sender["flow_id"] in flow_map
+                                  and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
+                                  and flow_map[sender["flow_id"]]["media_type"] == "video/H265"]
+
+            h264_video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                                  and sender["flow_id"] in flow_map
+                                  and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"
+                                  and flow_map[sender["flow_id"]]["media_type"] == "video/H264"]
+
+            video_senders = raw_video_senders + jxsv_video_senders + h265_video_senders + h264_video_senders
 
             sender_tested = list()
 
@@ -578,12 +590,23 @@ class MatroxSdpTest(GenericTest):
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
 
+                elif flow["media_type"] == "video/H265":
+                    try:
+                        check_sdp_rfc7798(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed RFC 7798 check: {}".format(sender["id"], e.message))
+                elif flow["media_type"] == "video/H264":
+                    try:
+                        check_sdp_rfc6184(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed RFC 6184 check: {}".format(sender["id"], e.message))
+
                 else:
                     return test.FAIL("Sender {} Flow {} has an unexpected media type {}"
                                      .format(sender["id"], flow["id"], flow["media_type"]))
 
             if len(sender_tested) == 0:
-                return test.UNCLEAR("No ACTIVE Uncompressed or JPEG-XS video Sender found on the Node => "
+                return test.UNCLEAR("No ACTIVE Uncompressed, JPEG-XS, HEVC or H.264 video Sender found on the Node => "
                                     "PLEASE ACTIVATE A SENDER to TEST")
 
             if len(video_senders) > 0:
@@ -592,7 +615,7 @@ class MatroxSdpTest(GenericTest):
         except KeyError as ex:
             return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
 
-        return test.UNCLEAR("No Uncompressed or JPEG-XS video Sender resources were found on the Node")
+        return test.UNCLEAR("No Uncompressed, JPEG-XS, HEVC or H.264 video Sender resources were found on the Node")
 
     def test_03(self, test):
         """
@@ -1529,6 +1552,8 @@ class MatroxSdpTest(GenericTest):
             except Exception as e:
                 return False, "Sender {} caps JSON to CCF conversion failed: {}".format(sender["id"], e)
 
+            print("SENDER CAPS:\n{}\n".format(str(sender_caps)))
+
             sender_active_constraints = self._get_is11_active_constraints(sender["id"])
             if sender_active_constraints:
                 try:
@@ -1539,11 +1564,15 @@ class MatroxSdpTest(GenericTest):
 
                 sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
 
+                print("SENDER CAPS (constrained by IS-11):\n{}\n".format(str(sender_caps)))
+
             # Get the primary capability set from SDP
             if len(sdp_flow_caps.capsets) == 0:
                 return False, "Sender {} SDP transport file or Flow  produced no capability sets".format(sender["id"])
 
             primary_capset = sdp_flow_caps.capsets[0]
+
+            print("SDP Transport File or Flow CAPS:\n{}\n".format(str(primary_capset)))
 
             # Use CCF conset_included_in_caps to verify inclusion
             # This checks if the SDP capset is included in (compatible with) the sender's caps
@@ -1552,8 +1581,8 @@ class MatroxSdpTest(GenericTest):
                 if is_included:
                     return True, ""
                 else:
-                    return False, "Sender {} SDP or Flow capabilities are not included in sender CCF constraints".format(
-                        sender["id"])
+                    return False, "Sender {} SDP or Flow capabilities are not " \
+                        "included in sender CCF constraints".format(sender["id"])
             except Exception as e:
                 return False, "Sender {} CCF capability inclusion check failed: {}".format(sender["id"], e)
 
@@ -1591,7 +1620,8 @@ class MatroxSdpTest(GenericTest):
 
             # Get the primary capability set from SDP
             if len(sdp_flow_caps.capsets) == 0:
-                return False, "Receiver {} SDP transport file or Flow produced no capability sets".format(receiver["id"])
+                return False, "Receiver {} SDP transport file or Flow produced no capability sets".format(
+                    receiver["id"])
 
             primary_capset = sdp_flow_caps.capsets[0]
 
@@ -1602,8 +1632,8 @@ class MatroxSdpTest(GenericTest):
                 if is_included:
                     return True, ""
                 else:
-                    return False, "Receiver {} SDP or Flow capabilities are not included in receiver CCF constraints".format(
-                        receiver["id"])
+                    return False, "Receiver {} SDP or Flow capabilities are not included " \
+                        "in receiver CCF constraints".format(receiver["id"])
             except Exception as e:
                 return False, "Receiver {} CCF capability inclusion check failed: {}".format(receiver["id"], e)
 

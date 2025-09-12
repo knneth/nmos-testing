@@ -32,10 +32,12 @@ files into CCF (Constraint-Capability Framework) capabilities using the MatroxSd
 parser and MatroxCCF framework.
 """
 
-from re import I
 from typing import Optional, List, Dict
 from fractions import Fraction
-from .MatroxSdp import MatroxSdp, MediaDescriptor, MatroxSdpEnums, get_aac_profile_level_from_sdp, get_h264_profile_level_from_sdp, get_h265_profile_level_from_sdp
+from .MatroxSdp import (
+    MatroxSdp, MediaDescriptor, MatroxSdpEnums, get_aac_profile_level_from_sdp,
+    get_h264_profile_level_from_sdp, get_h265_profile_level_from_sdp
+)
 from .MatroxCCF import (
     Caps, CapSet, Capability, RangeValue, RangeType,
     FormatVideo, FormatAudio, FormatData, FormatMux,
@@ -104,7 +106,7 @@ class SdpToCapabilitiesConverter:
         if self.sdp.primary_media:
             primary_capset = self._convert_media_to_capset(
                 self.sdp.primary_media,
-                "Primary",
+                "SDP",
                 preference=100
             )
 
@@ -115,7 +117,7 @@ class SdpToCapabilitiesConverter:
 
                 secondary_capset = self._convert_media_to_capset(
                     self.sdp.secondary_media,
-                    "Secondary_Verification",
+                    "SDP_Verification",
                     preference=100
                 )
 
@@ -167,7 +169,8 @@ class SdpToCapabilitiesConverter:
 
         return True
 
-    def _convert_media_to_capset(self, media: MediaDescriptor, label: str, preference: int = 100, mux : bool = False) -> CapSet:
+    def _convert_media_to_capset(self, media: MediaDescriptor, label: str, preference: int = 100,
+                                 mux: bool = False) -> CapSet:
         """
         Convert a MediaDescriptor to a CapSet
 
@@ -428,7 +431,11 @@ class SdpToCapabilitiesConverter:
             if media.h265_tier_flag:
                 tier_flag = 1
 
-            profile, level, progressive = get_h265_profile_level_from_sdp(media.h265_profile_space, media.h265_profile_id, tier_flag, media.h265_level_id, media.h265_profile_compatibility_indicator, media.h265_interop_constraints)
+            profile, level, progressive = get_h265_profile_level_from_sdp(media.h265_profile_space,
+                                                                          media.h265_profile_id, tier_flag,
+                                                                          media.h265_level_id,
+                                                                          media.h265_profile_compatibility_indicator,
+                                                                          media.h265_interop_constraints)
 
             if profile:
                 capabilities[CapFormatProfile] = Capability(
@@ -506,7 +513,8 @@ class SdpToCapabilitiesConverter:
                 RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
             )
 
-        if media.encoding_name == MatroxSdpEnums.EncodingL8 or media.encoding_name == MatroxSdpEnums.EncodingL16 or media.encoding_name == MatroxSdpEnums.EncodingL20 or media.encoding_name == MatroxSdpEnums.EncodingL24:
+        if (media.encoding_name == MatroxSdpEnums.EncodingL8 or media.encoding_name == MatroxSdpEnums.EncodingL16 or
+                media.encoding_name == MatroxSdpEnums.EncodingL20 or media.encoding_name == MatroxSdpEnums.EncodingL24):
             try:
                 # Extract bit depth from encoding name like "L24", "L16"
                 depth = int(media.encoding_name[1:])
@@ -545,10 +553,16 @@ class SdpToCapabilitiesConverter:
                     RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
                 )
 
+            if media.channel_order:
+                capabilities[CapTransportChannelOrder] = Capability(
+                    CapTransportChannelOrder,
+                    RangeValue(values=(media.channel_order,), type=RangeType.STRING)
+                )
+
         elif media.encoding_name == MatroxSdpEnums.EncodingAAC:
 
             profile, level = get_aac_profile_level_from_sdp(media.codec_profile_level_id)
-            
+
             if profile:
                 capabilities[CapFormatProfile] = Capability(
                     CapFormatProfile,
@@ -563,10 +577,10 @@ class SdpToCapabilitiesConverter:
 
             if media.aac_bitrate != 0:
                 capabilities[CapFormatBitRate] = Capability(
-					CapFormatBitRate,
-					RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT) # in Kbps
-				)
-    
+                    CapFormatBitRate,
+                    RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT)  # in Kbps
+                )
+
             if media.aac_max_displacement > 0:
                 capabilities[CapTransportPacketTransmissionMode] = Capability(
                     CapTransportPacketTransmissionMode,
@@ -613,10 +627,11 @@ class SdpToCapabilitiesConverter:
                     RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
                 )
 
-        elif media.encoding_name == MatroxSdpEnums.EncodingAAC_LATM or media.encoding_name == MatroxSdpEnums.EncodingAAC_ADTS:
+        elif (media.encoding_name == MatroxSdpEnums.EncodingAAC_LATM or
+              media.encoding_name == MatroxSdpEnums.EncodingAAC_ADTS):
 
             profile, level = get_aac_profile_level_from_sdp(media.codec_profile_level_id)
-            
+
             if profile:
                 capabilities[CapFormatProfile] = Capability(
                     CapFormatProfile,
@@ -631,10 +646,10 @@ class SdpToCapabilitiesConverter:
 
             if media.aac_bitrate != 0:
                 capabilities[CapFormatBitRate] = Capability(
-					CapFormatBitRate,
-					RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT) # in Kbps
-				)
-    
+                    CapFormatBitRate,
+                    RangeValue(values=(media.aac_bitrate / 1000,), type=RangeType.INT)  # in Kbps
+                    )
+
             if media.aac_max_displacement > 0:
                 capabilities[CapTransportPacketTransmissionMode] = Capability(
                     CapTransportPacketTransmissionMode,
@@ -646,7 +661,7 @@ class SdpToCapabilitiesConverter:
                     RangeValue(values=("non_interleaved_access_units",), type=RangeType.STRING)
                 )
 
-            if media.aac_config_present == False:
+            if media.aac_config_present is False:
                 if media.aac_config == "":
                     capabilities[CapTransportParameterSetsTransportMode] = Capability(
                         CapTransportParameterSetsTransportMode,
