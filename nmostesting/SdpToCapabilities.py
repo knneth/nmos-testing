@@ -58,7 +58,7 @@ class SdpToCapabilitiesConverter:
     def __init__(self):
         self.sdp = MatroxSdp()
 
-    def convert_file(self, sdp_file_path: str) -> Caps:
+    def convert_file(self, sdp_file_path: str, mux: bool = False) -> Caps:
         """
         Convert an SDP file to CCF Capabilities
 
@@ -71,9 +71,9 @@ class SdpToCapabilitiesConverter:
         with open(sdp_file_path, 'r') as f:
             sdp_content = f.read()
 
-        return self.convert_string(sdp_content)
+        return self.convert_string(sdp_content, mux)
 
-    def convert_string(self, sdp_content: str) -> Caps:
+    def convert_string(self, sdp_content: str, mux: bool = False) -> Caps:
         """
         Convert SDP content string to CCF Capabilities
 
@@ -89,9 +89,9 @@ class SdpToCapabilitiesConverter:
             raise ValueError(f"SDP parsing error: {error}")
 
         # Convert to capabilities
-        return self._convert_sdp_to_caps()
+        return self._convert_sdp_to_caps(mux)
 
-    def _convert_sdp_to_caps(self) -> Caps:
+    def _convert_sdp_to_caps(self, mux: bool = False) -> Caps:
         """
         Convert parsed SDP to CCF Capabilities
 
@@ -183,7 +183,7 @@ class SdpToCapabilitiesConverter:
         format_type = self._determine_format_type(media)
 
         # Media type capability
-        media_type = self._get_media_type_from_format(format_type, media)
+        media_type = self._get_media_type_from_format(format_type, media, mux)
 
         capabilities[CapFormatMediaType] = Capability(
             CapFormatMediaType,
@@ -198,7 +198,7 @@ class SdpToCapabilitiesConverter:
         elif format_type == FormatData:
             self._add_data_capabilities(media, capabilities)
         elif format_type == FormatMux:
-            self._add_mux_capabilities(media, capabilities, mux)
+            self._add_mux_capabilities(media, capabilities)
         else:
             raise ValueError("Unsupported format type: {}".format(format_type.s))
 
@@ -249,7 +249,7 @@ class SdpToCapabilitiesConverter:
             type = "application/"
         # Otherwise, use the media type
         else:
-            return media.type.s
+            type = media.type.s + "/"
 
         if media.format_code != 0:
             return type + media.encoding_name.s
@@ -482,9 +482,6 @@ class SdpToCapabilitiesConverter:
                     RangeValue(values=(media.bitrate_kbits,), type=RangeType.INT)
                 )
 
-        else:
-            raise ValueError("Unsupported encoding name: {}".format(media.encoding_name.s))
-
     def _add_audio_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add audio-specific capabilities"""
         # Channel count
@@ -689,8 +686,6 @@ class SdpToCapabilitiesConverter:
                     CapTransportMaxPacketTime,
                     RangeValue(values=(media.aac_constant_duration,), type=RangeType.FLOAT)
                 )
-        else: 
-            raise ValueError("Unsupported encoding name: {}".format(media.encoding_name.s))
 
     def _add_data_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add data-specific capabilities"""

@@ -1006,10 +1006,12 @@ class MatroxSdpTest(GenericTest):
         # Initialize the SDP to CCF converter
         converter = SdpToCapabilitiesConverter()
 
-        for resource_type in ["senders", "devices", "self"]:
+        for resource_type in ["senders", "flows", "devices", "self"]:
             valid, result = self.get_is04_resources(resource_type)
             if not valid:
                 return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
 
         try:
             # Get all senders - we'll verify capabilities using CCF rather than filtering by format upfront
@@ -1060,8 +1062,18 @@ class MatroxSdpTest(GenericTest):
                 # Convert SDP transport file to CCF capabilities
                 sdp_content = manifest_href_response.text
 
+                # Get the associated flow
+                flow_id = sender.get("flow_id")
+                if not flow_id or flow_id not in flow_map:
+                    return test.FAIL("Sender {} has invalid or missing flow_id {}"
+                                     .format(sender["id"], flow_id))
+
+                flow = flow_map[flow_id]
+
+                mux = True if flow["format"] == FormatMux else False
+
                 try:
-                    sdp_caps = converter.convert_string(sdp_content)
+                    sdp_caps = converter.convert_string(sdp_content, mux)
                 except Exception as e:
                     return test.FAIL("Sender {} SDP transport file conversion to CCF capabilities failed: {}"
                                      .format(sender["id"], e))
@@ -1153,8 +1165,10 @@ class MatroxSdpTest(GenericTest):
                                      .format(receiver["id"]))
 
                 # Convert SDP from active parameters to CCF capabilities
+                mux = True if receiver["format"] == FormatMux else False
+
                 try:
-                    sdp_caps = converter.convert_string(sdp_content)
+                    sdp_caps = converter.convert_string(sdp_content, mux)
                 except Exception as e:
                     return test.FAIL("Receiver {} SDP active parameters conversion to CCF capabilities failed: {}"
                                      .format(receiver["id"], e))
