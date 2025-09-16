@@ -102,9 +102,7 @@ from .suites import BCP0080201Test
 
 from .suites import BCP0040201Test
 from .suites import BCP0040101Test
-from .suites import MatroxTransportsTest
-from .suites import MatroxCapabilitiesTest
-from .suites import MatroxSdpTest
+from .suites import IpmxSdpTest
 
 FLASK_APPS = []
 DNS_SERVER = None
@@ -681,53 +679,8 @@ TEST_DEFINITIONS = {
         }],
         "class": BCP0040101Test.BCP0040101Test
     },
-    "Matrox-Transports": {
-        "name": "Matrox-Transports",
-        "specs": [{
-            "spec_key": "is-04",
-            "api_key": "node"
-        }, {
-            "spec_key": "is-05",
-            "api_key": "connection"
-        }],
-        "extra_specs": [{
-            "spec_key": "nmos-parameter-registers",
-            "api_key": "flow-register"
-        }, {
-            "spec_key": "nmos-parameter-registers",
-            "api_key": "sender-register"
-        }, {
-            "spec_key": "NMOS-MatroxOnly",
-            "api_key": "schemas"
-        }],
-        "class": MatroxTransportsTest.MatroxTransportsTest
-    },
-    "Matrox-Capabilities": {
-        "name": "Matrox-Capabilities",
-        "specs": [{
-            "spec_key": "is-04",
-            "api_key": "node"
-        }, {
-            "spec_key": "is-05",
-            "api_key": "connection"
-        }],
-        "extra_specs": [{
-            "spec_key": "nmos-parameter-registers",
-            "api_key": "flow-register"
-        }, {
-            "spec_key": "nmos-parameter-registers",
-            "api_key": "sender-register"
-        }, {
-            "spec_key": "NMOS-MatroxOnly",
-            "api_key": "schemas"
-        }, {
-            "spec_key": "bcp-004-01",
-            "api_key": "receiver-caps"
-        }],
-        "class": MatroxCapabilitiesTest.MatroxCapabilitiesTest
-    },
-    "Matrox-Sdp": {
-        "name": "Matrox-Sdp",
+    "IPMX-Sdp": {
+        "name": "IPMX-Sdp",
         "specs": [{
             "spec_key": "is-04",
             "api_key": "query"
@@ -745,13 +698,10 @@ TEST_DEFINITIONS = {
             "spec_key": "nmos-parameter-registers",
             "api_key": "sender-register"
         }, {
-            "spec_key": "NMOS-MatroxOnly",
-            "api_key": "schemas"
-        }, {
             "spec_key": "bcp-004-01",
             "api_key": "receiver-caps"
         }],
-        "class": MatroxSdpTest.MatroxSdpTest
+        "class": IpmxSdpTest.IpmxSdpTest
     },
     "BCP-006-02-01": {
         "name": "BCP-006-02 NMOS With H.264",

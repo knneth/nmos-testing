@@ -96,7 +96,7 @@ MuxFullyDescribedMpeg2TS = "application/MP2T"
 MuxFullyDescribedGeneric = "application/mp2t"
 
 
-class MatroxSdpTest(GenericTest):
+class IpmxSdpTest(GenericTest):
     """
     Runs Node Tests covering SDP transport files
     """

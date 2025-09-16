@@ -458,18 +458,6 @@ SPECIFICATIONS = {
             }
         }
     },
-    "NMOS-MatroxOnly": {
-        "repo": "NMOS-MatroxOnly",
-        "url": "https://github.com/alabou/",
-        "branch": "main",
-        "versions": ["main"],
-        "default_version": "main",
-        "apis": {
-            "schemas": {
-                "name": "Matrox Schemas"
-            }
-        }
-    },
     "testing-facade": {
         "repo": None,
         "versions": ["v1.0"],
