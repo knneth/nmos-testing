@@ -1618,12 +1618,16 @@ class IpmxSdpTest(GenericTest):
             except Exception as e:
                 return False, "Receiver {} caps JSON to CCF conversion failed: {}".format(receiver["id"], e)
 
+            print("RECEIVER CAPS:\n{}\n".format(str(receiver_caps)))
+
             # Get the primary capability set from SDP
             if len(sdp_flow_caps.capsets) == 0:
                 return False, "Receiver {} SDP transport file or Flow produced no capability sets".format(
                     receiver["id"])
 
             primary_capset = sdp_flow_caps.capsets[0]
+
+            print("SDP Transport File or Flow CAPS:\n{}\n".format(str(primary_capset)))
 
             # Use CCF conset_included_in_caps to verify inclusion
             # This checks if the SDP capset is included in (compatible with) the receiver's caps

@@ -2535,6 +2535,7 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
                     range_value = parse_range_value(caps, range_type)
                 except ValueError as ve:
                     raise ValueError(f"Error parsing capability '{cap_name}' in CapSet '{label}': {ve}")
+                
             elif isinstance(cap_constraints, list):
 
                 elements : List[Union[int, float, Fraction, str, bool]] = cap_constraints

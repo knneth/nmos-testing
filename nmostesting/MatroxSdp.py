@@ -589,7 +589,7 @@ class MediaDescriptor:
         self.aac_random_access_indication: bool = False
         self.aac_bitrate: uint64 = 0
         # HKEP
-        self.hkep: List[HkepDescriptor] = [HkepDescriptor() for _ in range(MAX_HKEPS)]
+        self.hkep_desc: List[HkepDescriptor] = [HkepDescriptor() for _ in range(MAX_HKEPS)]
         # Privacy
         self.privacy_desc: PrivacyDescriptor = PrivacyDescriptor()
         # Media Clock
@@ -640,9 +640,9 @@ class MatroxSdp:
         # Bandwidth (session level)
         self.bitrate_kbits: uint = 0
         # HKEP (session level)
-        self.hkep: List[HkepDescriptor] = [HkepDescriptor() for _ in range(MAX_HKEPS)]
+        self.hkep_desc: List[HkepDescriptor] = [HkepDescriptor() for _ in range(MAX_HKEPS)]
         # Privacy
-        self.privacy: PrivacyDescriptor = PrivacyDescriptor()
+        self.privacy_desc: PrivacyDescriptor = PrivacyDescriptor()
         # Media Clock
         self.media_clock_type: Optional[EnumId] = None
         self.media_clock_offset: uint64 = 0
@@ -995,14 +995,14 @@ class MatroxSdp:
         if self.bitrate_kbits:
             self.current_media.bitrate_kbits = self.bitrate_kbits
         for i in range(MAX_HKEPS):
-            if self.hkep[i].address:
-                self.current_media.hkep[i].address = self.hkep[i].address
-                self.current_media.hkep[i].is_ipv6 = self.hkep[i].is_ipv6
-                self.current_media.hkep[i].port = self.hkep[i].port
-                self.current_media.hkep[i].node_id = self.hkep[i].node_id
-                self.current_media.hkep[i].port_id = self.hkep[i].port_id
-        if self.privacy.protocol:
-            self.current_media.privacy_desc = self.privacy
+            if self.hkep_desc[i].address:
+                self.current_media.hkep_desc[i].address = self.hkep_desc[i].address
+                self.current_media.hkep_desc[i].is_ipv6 = self.hkep_desc[i].is_ipv6
+                self.current_media.hkep_desc[i].port = self.hkep_desc[i].port
+                self.current_media.hkep_desc[i].node_id = self.hkep_desc[i].node_id
+                self.current_media.hkep_desc[i].port_id = self.hkep_desc[i].port_id
+        if self.privacy_desc.protocol:
+            self.current_media.privacy_desc = self.privacy_desc
         if self.session_control:
             self.current_media.sub_stream_control = self.session_control
         for i in range(MAX_EXTMAPS):
@@ -1289,7 +1289,7 @@ class MatroxSdp:
         hkep_desc.port = port
         hkep_desc.node_id = node_id
         hkep_desc.port_id = port_id
-        target = self.current_media.hkep if self.in_media_section else self.hkep
+        target = self.current_media.hkep_desc if self.in_media_section else self.hkep_desc
         for i in range(MAX_HKEPS):
             if not target[i].address:
                 target[i] = hkep_desc
@@ -1301,8 +1301,6 @@ class MatroxSdp:
         return None
 
     def process_privacy(self, value: bytes) -> Optional[str]:
-        if not self.in_media_section:
-            return "invalid privacy attribute line"
         split = value.split(b';')
         if len(split) != 6:
             return "invalid privacy attribute line"
@@ -1349,8 +1347,13 @@ class MatroxSdp:
                 privacy.key_id = val
             else:
                 return "invalid privacy attribute line"
-        self.current_media.privacy_desc = privacy
-        self.current_media.privacy = True
+
+        if self.in_media_section:
+            self.current_media.privacy_desc = privacy
+            self.current_media.privacy = True
+        else:
+            self.privacy_desc = privacy
+
         return None
 
     def process_session_control(self, value: bytes) -> Optional[str]:

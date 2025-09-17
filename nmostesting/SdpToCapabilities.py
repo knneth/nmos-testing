@@ -491,6 +491,7 @@ class SdpToCapabilitiesConverter:
 
     def _add_audio_capabilities(self, media: MediaDescriptor, capabilities: Dict[str, Capability]):
         """Add audio-specific capabilities"""
+        
         # Channel count
         if media.channels > 0:
             capabilities[CapFormatChannelCount] = Capability(
@@ -517,7 +518,7 @@ class SdpToCapabilitiesConverter:
                 media.encoding_name == MatroxSdpEnums.EncodingL20 or media.encoding_name == MatroxSdpEnums.EncodingL24):
             try:
                 # Extract bit depth from encoding name like "L24", "L16"
-                depth = int(media.encoding_name[1:])
+                depth = int(str(media.encoding_name)[1:])
                 capabilities[CapFormatSampleDepth] = Capability(
                     CapFormatSampleDepth,
                     RangeValue(values=(depth,), type=RangeType.INT)
@@ -529,13 +530,13 @@ class SdpToCapabilitiesConverter:
             if media.p_time_us > 0:
                 capabilities[CapTransportPacketTime] = Capability(
                     CapTransportPacketTime,
-                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             if media.max_p_time_us > 0:
                 capabilities[CapTransportMaxPacketTime] = Capability(
                     CapTransportMaxPacketTime,
-                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.max_p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
         elif media.encoding_name == MatroxSdpEnums.EncodingAM824:
@@ -544,13 +545,13 @@ class SdpToCapabilitiesConverter:
             if media.p_time_us > 0:
                 capabilities[CapTransportPacketTime] = Capability(
                     CapTransportPacketTime,
-                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             if media.max_p_time_us > 0:
                 capabilities[CapTransportMaxPacketTime] = Capability(
                     CapTransportMaxPacketTime,
-                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.max_p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             if media.channel_order:
@@ -607,13 +608,13 @@ class SdpToCapabilitiesConverter:
             if media.p_time_us > 0:
                 capabilities[CapTransportPacketTime] = Capability(
                     CapTransportPacketTime,
-                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             if media.max_p_time_us > 0:
                 capabilities[CapTransportMaxPacketTime] = Capability(
                     CapTransportMaxPacketTime,
-                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.max_p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             # RFC 3640 Packet time
@@ -682,13 +683,13 @@ class SdpToCapabilitiesConverter:
             if media.p_time_us > 0:
                 capabilities[CapTransportPacketTime] = Capability(
                     CapTransportPacketTime,
-                    RangeValue(values=(media.p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             if media.max_p_time_us > 0:
                 capabilities[CapTransportMaxPacketTime] = Capability(
                     CapTransportMaxPacketTime,
-                    RangeValue(values=(media.max_p_time_us,), type=RangeType.FLOAT)
+                    RangeValue(values=(float(media.max_p_time_us)/1000.0,), type=RangeType.FLOAT)
                 )
 
             # RFC 3640 Packet time
