@@ -209,14 +209,6 @@ class FlowToCapabilitiesConverter:
                                                                   if privacy is not None
                                                                   else None, type=RangeType.BOOL))
 
-            info_block = sender.get("info_block", None)
-            if info_block:
-                caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
-                                                         RangeValue(values=tuple(info_block)
-                                                                    if info_block is not None
-                                                                    and isinstance(info_block, list)
-                                                                    else None, type=RangeType.INT))
-
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_coded_video_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
@@ -368,14 +360,6 @@ class FlowToCapabilitiesConverter:
                                                        RangeValue(values=(privacy,) if privacy is not None
                                                                   else None, type=RangeType.BOOL))
 
-            info_block = sender.get("info_block", None)
-            if info_block:
-                caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
-                                                         RangeValue(values=tuple(info_block)
-                                                                    if info_block is not None
-                                                                    and isinstance(info_block, list)
-                                                                    else None, type=RangeType.INT))
-
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_coded_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
@@ -491,14 +475,6 @@ class FlowToCapabilitiesConverter:
                                                        RangeValue(values=(privacy,) if privacy is not None
                                                                   else None, type=RangeType.BOOL))
 
-            info_block = sender.get("info_block", None)
-            if info_block:
-                caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
-                                                         RangeValue(values=tuple(info_block)
-                                                                    if info_block is not None
-                                                                    and isinstance(info_block, list)
-                                                                    else None, type=RangeType.INT))
-
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_raw_audio_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
@@ -568,13 +544,6 @@ class FlowToCapabilitiesConverter:
                                                        RangeValue(values=(privacy,) if privacy is not None
                                                                   else None, type=RangeType.BOOL))
 
-            info_block = sender.get("info_block", None)
-            if info_block:
-                caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
-                                                         RangeValue(values=tuple(info_block) if info_block is not None
-                                                                    and isinstance(info_block, list)
-                                                                    else None, type=RangeType.INT))
-
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 
     def _convert_data_flow_to_capset(self, flow: Dict[str, Any], source: Dict[str, Any],
@@ -622,14 +591,6 @@ class FlowToCapabilitiesConverter:
                 caps[CapTransportPrivacy] = Capability(CapTransportPrivacy,
                                                        RangeValue(values=(privacy,) if privacy is not None
                                                                   else None, type=RangeType.BOOL))
-
-            info_block = sender.get("info_block", None)
-            if info_block:
-                caps[CapTransportInfoBlock] = Capability(CapTransportInfoBlock,
-                                                         RangeValue(values=tuple(info_block)
-                                                                    if info_block is not None
-                                                                    and isinstance(info_block, list)
-                                                                    else None, type=RangeType.INT))
 
         return CapSet(caps=caps, label="Flow", preference=100, format=format, layer=layer)
 

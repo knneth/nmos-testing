@@ -519,7 +519,7 @@ def check_sdp_st2110_31(md: MediaDescriptor) -> None:
     if md.channel_order and not md.channel_order.startswith("SMPTE2110."):
         raise SdpCheckError("ST2110-31 invalid channel-order convention")
     
-    valid_ptimes = {83, 100, 125, 108, 136, 91}
+    valid_ptimes = {83, 80, 125, 120, 1000, 1088, 1090, 136, 140, 91, 90}
     if md.p_time_us not in valid_ptimes:
         raise SdpCheckError("ST2110-31 invalid ptime")
     

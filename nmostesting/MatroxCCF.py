@@ -96,10 +96,13 @@ CapTransportSynchronousMedia = "urn:x-matrox:cap:transport:synchronous_media"
 CapTransportUsbClass = "urn:x-nmos:cap:transport:usb_class"
 
 CapMetaLabel = "urn:x-nmos:cap:meta:label"
+CapMetaEnabled = "urn:x-nmos:cap:meta:enabled"
 CapMetaPreference = "urn:x-nmos:cap:meta:preference"
 CapMetaFormat = "urn:x-matrox:cap:meta:format"
 CapMetaLayer = "urn:x-matrox:cap:meta:layer"
+CapMetaLayerEnabled = "urn:x-matrox:cap:meta:layer_enabled"
 CapMetaLayerCompatibilityGroups = "urn:x-matrox:cap:meta:layer_compatibility_groups"
+CapMetaInfoBlock = "urn:x-matrox:cap:meta:info_block"
 
 def Namespace(*names: str) -> Set[str]:
     return set(names)
