@@ -488,7 +488,7 @@ def check_sdp_st2110_30(md: MediaDescriptor) -> None:
     if md.p_time_us not in valid_ptimes:
         raise SdpCheckError("ST2110-30 unexpected ptime")
     
-    if md.max_p_time_us == 0:
+    if md.max_p_time_us != 0 and (md.max_p_time_us not in valid_ptimes or md.max_p_time_us < md.p_time_us):
         raise SdpCheckError("ST2110-30 invalid maxptime")
     
     if md.ts_ref_clock_source is None:
