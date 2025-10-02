@@ -1428,7 +1428,7 @@ class IpmxSdpTest(GenericTest):
 
     def test_10(self, test):
         """
-        Pre-Test to get a capture of a video sender
+        Pre-Test to get a PCAP capture of a video sender along with its SDP transport file.
         """
 
         self.test = test
@@ -1439,23 +1439,26 @@ class IpmxSdpTest(GenericTest):
                 return test.FAIL(result)
 
         flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
-        source_map = {source["id"]: source for source in self.is04_resources["sources"].values()}
-        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
-        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
 
         try:
             video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
                              and sender["flow_id"] in flow_map
                              and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"]
 
-            sender_tested = list()
+            audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                             and sender["flow_id"] in flow_map
+                             and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"]
 
-            for sender in video_senders:
+            senders = video_senders + audio_senders
 
-                flow = flow_map[sender["flow_id"]]
-                source = source_map[flow["source_id"]]
-                device = device_map[sender["device_id"]]
-                node = node_map[device["node_id"]]
+            for sender in senders:
+
+                if sender in video_senders:
+                    format = "video"
+                elif sender in audio_senders:
+                    format = "audio"
+                else:
+                    return test.FAIL("UNEXPECTED sender {}".format(sender["id"]))
 
                 # check the transport => only RTP is currently supported by IPMX
                 if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
@@ -1468,14 +1471,13 @@ class IpmxSdpTest(GenericTest):
                     return test.FAIL("Sender {} not responding to IS-05 request"
                                      .format(sender["id"]))
 
-                # The IS-05 active transport parameters provide an array of such along with the master_enable.
                 active = response.json()
 
                 # We require an active sender in order to get an SDP transport file
                 url = "single/senders/{}/staged".format(sender["id"])
                 if not active["master_enable"]:
                     # activate the sender first
-                    valid, response = self.is05_utils.checkCleanRequestJSON("PATCH", url, {
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": True,
                         "activation": {"mode": "activate_immediate"}
                     })
@@ -1483,7 +1485,14 @@ class IpmxSdpTest(GenericTest):
                         return test.FAIL("Sender {} cannot activate the sender"
                                          .format(sender["id"]))
 
-                sender_tested.append(sender["id"])
+                    # update the active parameters after activation
+                    url = "single/senders/{}/active".format(sender["id"])
+                    valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                    if not valid:
+                        return test.FAIL("Sender {} not responding to IS-05 request"
+                                         .format(sender["id"]))
+
+                    active = response.json()
 
                 manifest_href = "single/senders/{}/transportfile".format(sender["id"])
                 manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest("GET", manifest_href)
@@ -1504,7 +1513,7 @@ class IpmxSdpTest(GenericTest):
                     sdp.decode(manifest_href_response.text)
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
-                                     .format(sender["id"], href, e))
+                                     .format(sender["id"], manifest_href, e))
 
                 # Check IPMX
                 if not sdp.primary_media.ipmx:
@@ -1531,17 +1540,19 @@ class IpmxSdpTest(GenericTest):
                                              sdp.primary_media.source_filter_dst_address,
                                              sdp.primary_media.source_filter_src_address))
 
-                # TEMPORARILY deactivate the sender first
-                valid, response = self.is05_utils.checkCleanRequestJSON("PATCH", url, {
+                # deactivate the sender as we want to start streaming only once the PCAP capture is enabled
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                     "master_enable": False,
                     "activation": {"mode": "activate_immediate"}
                 })
                 if not valid:
-                    return test.FAIL("Sender {} cannot deactivate the sender"
-                                        .format(sender["id"]))
+                    return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
 
                 # Join the multicast stream and keep it joined
                 multicast_socket = None
+                interface_name = None
+
                 try:
                     # Extract multicast parameters
                     multicast_ip = primary_transport_params["destination_ip"]
@@ -1551,7 +1562,7 @@ class IpmxSdpTest(GenericTest):
                     # Validate multicast parameters
                     if not MulticastUtils.is_multicast_address(multicast_ip):
                         return test.FAIL("Sender {} destination IP {} is not a valid multicast address"
-                                        .format(sender["id"], multicast_ip))
+                                         .format(sender["id"], multicast_ip))
 
                     # Join the multicast group and keep it joined for the duration of the test
                     print("Joining multicast group for sender {}: {}:{} from source {}"
@@ -1559,7 +1570,7 @@ class IpmxSdpTest(GenericTest):
 
                     # Try IGMP v3 with source filtering first
                     try:
-                        multicast_socket = MulticastUtils.join_multicast_group_igmpv3(
+                        multicast_socket, interface_name = MulticastUtils.join_multicast_group_igmpv3(
                             multicast_ip, source_ip, port
                         )
                         print("Successfully joined multicast group {} with source filtering for {}"
@@ -1567,27 +1578,35 @@ class IpmxSdpTest(GenericTest):
                     except MulticastJoinError:
                         # Fallback to simple multicast join
                         try:
-                            multicast_socket = MulticastUtils.join_multicast_group_simple(
+                            multicast_socket, interface_name = MulticastUtils.join_multicast_group_simple(
                                 multicast_ip, port
                             )
                             print("Successfully joined multicast group {} (fallback mode)"
                                   .format(multicast_ip))
                         except MulticastJoinError as e:
-                            print("Warning: Failed to join multicast stream: {} (continuing test without multicast)"
-                                  .format(str(e)))
-                            # Continue without multicast - tcpdump might still capture traffic
+                            return test.FAIL("Sender {} failed to join multicast stream, error: {}"
+                                             .format(sender["id"], e))
 
                 except Exception as e:
-                    print("Warning: Error during multicast join: {} (continuing test)"
-                          .format(str(e)))
-                    # Don't fail the test for multicast join issues as they might be environmental
+                    return test.FAIL("Sender {} failed to join multicast stream, error: {}"
+                                     .format(sender["id"], e))
 
                 # Start tcpdump to capture the multicast stream for 3 seconds in parallel with this test
-                pcap_filename = "video-{}.pcap".format(sender["id"])
+                pcap_filename = format + "-{}.pcap".format(sender["id"])
+                sdp_filename = format + "-{}.sdp".format(sender["id"])
 
                 # Get the directory of this script and look for capture scripts in parent directory
                 script_dir = os.path.dirname(os.path.abspath(__file__))
-                parent_dir = os.path.dirname(os.path.dirname(script_dir)) # parent of parent directory
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory
+
+                # Remove the files
+                try:
+                    os.remove(os.path.join(parent_dir, pcap_filename))
+                    os.remove(os.path.join(parent_dir, sdp_filename))
+                except Exception:
+                    pass  # ignore if file not found
+
+                tcpdump_process = None
 
                 try:
                     if platform.system() == "Windows":
@@ -1599,60 +1618,60 @@ class IpmxSdpTest(GenericTest):
                         tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_filename])
 
                     print("Started packet capture: {}".format(pcap_filename))
+
                 except (FileNotFoundError, OSError) as e:
-                    print("Warning: Could not start packet capture: {}. Continuing test without capture.".format(str(e)))
-                    tcpdump_process = None
+                    return test.FAIL("Failed to start packet capture, error: {}".format(e))
 
                 time.sleep(3)
 
                 # Now reactivate the sender for the PCAP capture
-                valid, response = self.is05_utils.checkCleanRequestJSON("PATCH", url, {
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                     "master_enable": True,
                     "activation": {"mode": "activate_immediate"}
                 })
                 if not valid:
-                    return test.FAIL("Sender {} cannot activate the sender"
-                                        .format(sender["id"]))
+                    return test.FAIL("Sender {} cannot activate the sender".format(sender["id"]))
 
                 # Wait packet capture if it was started
-                if tcpdump_process:
-                    try:
-                        tcpdump_process.wait() # wait for the process to terminate
-                        print("Stopped packet capture")
-                    except Exception as e:
-                        print("Warning: Error stopping packet capture: {}".format(str(e)))
+                try:
+                    tcpdump_process.wait()  # wait for the process to terminate
+                    print("Stopped packet capture: {}".format(pcap_filename))
+                except Exception as e:
+                    return test.FAIL("Failed to stop packet capture, error: {}".format(e))
+
+                with open(os.path.join(parent_dir, sdp_filename), 'w') as file:
+                    file.write(manifest_href_response.text)
 
                 time.sleep(1)
 
                 # Finally deactivate the sender
-                valid, response = self.is05_utils.checkCleanRequestJSON("PATCH", url, {
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                     "master_enable": False,
                     "activation": {"mode": "activate_immediate"}
                 })
                 if not valid:
                     return test.FAIL("Sender {} cannot deactivate the sender"
-                                        .format(sender["id"]))
+                                     .format(sender["id"]))
+
                 # Clean up multicast connection
-                if multicast_socket:
-                    try:
-                        MulticastUtils.leave_multicast_group(multicast_socket, multicast_ip)
-                        multicast_socket.close()
-                        print("Left multicast group {} for sender {}"
-                              .format(multicast_ip, sender["id"]))
-                    except Exception as e:
-                        print("Warning: Error leaving multicast group: {}".format(str(e)))
+                try:
+                    MulticastUtils.leave_multicast_group(multicast_socket, multicast_ip, interface_name)
+                    multicast_socket.close()
+                    multicast_socket = None
+                    print("Left multicast group {} for sender {}"
+                          .format(multicast_ip, sender["id"]))
+                except Exception as e:
+                    print("Warning: Error leaving multicast group: {}".format(str(e)))
 
-            if len(sender_tested) == 0:
-                return test.UNCLEAR("No video Sender found on the Node => "
-                                    "PLEASE ACTIVATE A SENDER to TEST")
-
-            if len(video_senders) > 0:
+            if len(senders) > 0:
                 return test.PASS()
 
-        except KeyError as ex:
-            return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
+        except KeyError as e:
+            return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
 
-        return test.UNCLEAR("No video Sender resources were found on the Node")
+        return test.UNCLEAR("No Sender resources were found on the Node")
 
     def _get_sender_from_registry(self, sender_id):
         """
