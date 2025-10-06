@@ -1,0 +1,1 @@
+python nmos-test.py suite BCP-005-02-01 --tests test_01 test_03 --host %IPMX_RECEIVER_ADDRESS% %IPMX_RECEIVER_ADDRESS% --port %IPMX_RECEIVER_PORT% %IPMX_RECEIVER_PORT% --version v1.3 v1.1 --senders ipmx-test-senders-NONE.guid --receivers ipmx-test-receivers.guid

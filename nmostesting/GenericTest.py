@@ -621,10 +621,11 @@ class GenericTest(object):
         return endpoints
 
     def do_test_api_resource(self, resource, response_code, api):
-        test = Test("{} /x-nmos/{}/{}{}".format(resource[1]['method'].upper(),
+        test_path = "{} /x-nmos/{}/{}{}".format(resource[1]['method'].upper(),
                                                 api,
                                                 self.apis[api]["version"],
-                                                resource[0].rstrip("/")), self.auto_test_name(api))
+                                               resource[0].rstrip("/"))
+        test = Test(test_path, self.auto_test_name(api))
 
         endpoints = NMOSUtils.sampled_list(self.generate_parameterized_endpoints(resource[0], resource[1]['params']))
         for endpoint, param_values in endpoints:
@@ -637,7 +638,7 @@ class GenericTest(object):
                                     if param_values else entity_message)
         if len(endpoints) == 0:
             # There were no saved entities found, so we can't test this parameterised URL
-            return test.UNCLEAR("No resources found to perform this test")
+            return test.UNCLEAR("No resources found to perform this test: {}".format(test_path))
         return test.PASS()
 
     def check_api_resource(self, test, resource, response_code, api, path):

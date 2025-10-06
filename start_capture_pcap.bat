@@ -1,0 +1,1 @@
+dumpcap -q -i 3 -B 256 -a duration:3 -w %1

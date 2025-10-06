@@ -1,0 +1,1 @@
+python nmos-test.py suite IPMX-Sdp --tests test_02 test_03 test_04 test_05 test_07 --host %IPMX_REGISTRY_ADDRESS% %IPMX_SENDER_ADDRESS% %IPMX_SENDER_ADDRESS% --port %IPMX_REGISTRY_PORT% %IPMX_SENDER_PORT% %IPMX_SENDER_PORT% --version v1.3 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers-NONE.guid

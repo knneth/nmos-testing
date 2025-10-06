@@ -2303,11 +2303,11 @@ class IS1101Test(GenericTest):
                 time.sleep(CONFIG.STABLE_STATE_DELAY)
                 if not valid:
                     return test.FAIL(
-                        "Unexpected response from the Node API: {}".format(response)
+                        "Unexpected response from the streamcompatibility API: {}".format(response)
                     )
                 if response.status_code != 200:
                     return test.FAIL(
-                        "The sender {} is not available in the Node API request: {}".format(
+                        "The sender {} is not available in the streamcompatibility API request: {}".format(
                             sender_id, response
                         )
                     )
@@ -2419,11 +2419,11 @@ class IS1101Test(GenericTest):
 
                 if not valid:
                     return test.FAIL(
-                        "Unexpected response from the Node API: {}".format(response)
+                        "Unexpected response from the streamcompatibility API: {}".format(response)
                     )
                 if response.status_code != 200:
                     return test.FAIL(
-                        "The sender {} is not available in the Node API request: {}".format(
+                        "The sender {} is not available in the streamcompatibility API request: {}".format(
                             sender_id, response
                         )
                     )

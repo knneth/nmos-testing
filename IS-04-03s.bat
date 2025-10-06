@@ -1,0 +1,1 @@
+python nmos-test.py suite IS-04-03 --tests test_01 --host %IPMX_SENDER_ADDRESS% --port %IPMX_SENDER_PORT% --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers-NONE.guid
