@@ -1640,9 +1640,8 @@ class IpmxSdpTest(GenericTest):
                 except Exception as e:
                     return test.FAIL("Failed to stop packet capture, error: {}".format(e))
 
-                with open(os.path.join(parent_dir, sdp_filename), 'w') as file:
-                    file.write(manifest_href_response.text)
-
+                with open(os.path.join(parent_dir, sdp_filename), 'wb') as file:
+                    file.write(manifest_href_response.content)
                 time.sleep(1)
 
                 # Finally deactivate the sender
