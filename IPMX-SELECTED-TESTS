@@ -89,11 +89,11 @@ IpmxSdpTest:
 
 test_02 test_03 test_04 test_05 test_06 test_07 test_08
 
-RECEIVER: test_04 test_06 test_08
+RECEIVER: test_04 test_06 test_08 test_11
 
-SENDER: test_02 test_03 test_04 test_05 test_07
+SENDER: test_02 test_03 test_04 test_05 test_07 test_11
 
-EXAMPLE: python3 nmos-test.py suite IPMX-Sdp --tests test_02 test_03 test_04 test_05 test_06 test_07 test_08 --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 8443 5010 5010 --version v1.3 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IPMX-Sdp --tests test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_11 --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 8443 5010 5010 --version v1.3 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
 
 BCP-006-01-01 (JPEG-XS):
 
