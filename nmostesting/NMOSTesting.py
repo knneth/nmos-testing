@@ -1225,6 +1225,8 @@ def parse_arguments():
                               help="space separated test names to ignore the results from")
     suite_parser.add_argument('--output', default=DEFAULT_ARGS["output"],
                               help="filename to save test results to (ending .xml or .json), otherwise print to stdout")
+    suite_parser.add_argument('--print-with-output', default=DEFAULT_ARGS["print_with_output"],
+                              help="print to stdout even if output to a file is active")
     suite_parser.add_argument('--senders', default=DEFAULT_ARGS["senders"],
                               help="filename containing the sender GUID to test")
     suite_parser.add_argument('--receivers', default=DEFAULT_ARGS["receivers"],
@@ -1423,10 +1425,13 @@ def run_noninteractive_tests(args):
             results = run_tests(args.suite, endpoints, [args.selection])
         else:
             results = run_tests(args.suite, endpoints, args.tests)
+
         if args.output:
             exit_code = write_test_results(results, endpoints, args)
-        else:
+
+        if args.print_with_output or not args.output:
             exit_code = print_test_results(results, endpoints, args)
+
     except Exception as e:
         print(" * ERROR: {}".format(str(e)))
         exit_code = ExitCodes.ERROR
