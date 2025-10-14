@@ -19,6 +19,7 @@ import ipaddress
 import platform
 import subprocess
 import re
+import random
 from typing import Optional, Tuple
 from . import Config as CONFIG
 
@@ -57,6 +58,44 @@ class MulticastUtils:
             return False
         except ValueError:
             return False
+
+    @staticmethod
+    def is_valid_admin_scope_multicast(ip: str) -> bool:
+        """Check if the given IP address is a valid admin scope multicast address (239.0.0.0/8)"""
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            if ip_obj.version == 4 and ip_obj.is_multicast:
+                # Check if it's in the admin scope range (239.0.0.0 - 239.255.255.255)
+                return ip.split('.')[0] == '239'
+            return False
+        except ValueError:
+            return False
+
+    @staticmethod
+    def getRandomIpv4AddressWithinRange(start_ip: str, end_ip: str) -> str:
+        """Generate a random IPv4 address within the given IP range (inclusive)"""
+        try:
+            start = ipaddress.ip_address(start_ip)
+            end = ipaddress.ip_address(end_ip)
+
+            if start.version != 4 or end.version != 4:
+                raise ValueError("Only IPv4 addresses are supported")
+
+            if start > end:
+                raise ValueError("Start IP must be less than or equal to end IP")
+
+            # Convert to integers for random selection
+            start_int = int(start)
+            end_int = int(end)
+
+            # Generate random IP within range
+            random_int = random.randint(start_int, end_int)
+            random_ip = ipaddress.ip_address(random_int)
+
+            return str(random_ip)
+
+        except ValueError as e:
+            raise ValueError(f"Invalid IP range: {e}")
 
     @staticmethod
     def get_interface_ip() -> str:
