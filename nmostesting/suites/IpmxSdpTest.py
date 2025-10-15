@@ -2019,6 +2019,66 @@ class IpmxSdpTest(GenericTest):
 
         return test.UNCLEAR("No Receiver resources were found on the Node")
 
+    def test_13(self, test):
+        """
+        List all the Senders and Receivers on the Node along with their label, description and transport.
+        """
+        self.test = test
+
+        for resource_type in ["senders", "receivers"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        # Display Senders in a formatted table
+        senders = list(self.is04_resources["senders"].values())
+        if senders:
+            print("\n" + "=" * 150)
+            print("SENDERS")
+            print("=" * 150)
+            print("{:<38} {:<37} {:<57} {:<18}".format("GUID", "Label", "Description", "Transport"))
+            print("-" * 150)
+            for sender in senders:
+                label = sender.get("label", "")[:36]
+                description = sender.get("description", "")[:56]
+                transport = sender.get("transport", "").replace("urn:x-nmos:transport:", "")[:17]
+                print("{:<38} {:<37} {:<57} {:<18}".format(
+                    sender["id"],
+                    label,
+                    description,
+                    transport
+                ))
+            print("=" * 150)
+            print("Total Senders: {}".format(len(senders)))
+        else:
+            print("\nNo Senders found on the Node")
+
+        # Display Receivers in a formatted table
+        receivers = list(self.is04_resources["receivers"].values())
+        if receivers:
+            print("\n" + "=" * 150)
+            print("RECEIVERS")
+            print("=" * 150)
+            print("{:<38} {:<37} {:<57} {:<18}".format("GUID", "Label", "Description", "Transport"))
+            print("-" * 150)
+            for receiver in receivers:
+                label = receiver.get("label", "")[:36]
+                description = receiver.get("description", "")[:56]
+                transport = receiver.get("transport", "").replace("urn:x-nmos:transport:", "")[:17]
+                print("{:<38} {:<37} {:<57} {:<18}".format(
+                    receiver["id"],
+                    label,
+                    description,
+                    transport
+                ))
+            print("=" * 150)
+            print("Total Receivers: {}".format(len(receivers)))
+        else:
+            print("\nNo Receivers found on the Node")
+
+        print()  # Empty line at the end
+        return test.PASS()
+
     def _get_sender_from_registry(self, sender_id):
         """
         Get sender information from the registry using the query API
