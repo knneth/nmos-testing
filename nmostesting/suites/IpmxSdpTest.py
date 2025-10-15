@@ -1718,9 +1718,8 @@ class IpmxSdpTest(GenericTest):
                 active = response.json()
 
                 # We require an active sender in order to get an SDP transport file
-                url = "single/senders/{}/staged".format(sender["id"])
                 if not active["master_enable"]:
-                    return test.FAIL("Sender {}is not active. This test requires an active sender "
+                    return test.FAIL("Sender {} is not active. This test requires an active sender "
                                      "with a default multicast address".format(sender["id"]))
 
                 sdp_retry = 5
@@ -1763,6 +1762,11 @@ class IpmxSdpTest(GenericTest):
                     return test.FAIL("Sender {} SDP is not indicating IPMX"
                                      .format(sender["id"]))
 
+                # Check that the device is not using redundancy (simplication for this test)
+                if sdp.secondary_media or len(active["transport_params"]) > 1:
+                    return test.FAIL("Sender {} is using redundancy and multiple transport parameters. Disable redundancy and re-test."
+                                     .format(sender["id"]))
+
                 # Check the multicast address of the transport parameters
                 primary_transport_params = active["transport_params"][0]
 
@@ -1776,7 +1780,7 @@ class IpmxSdpTest(GenericTest):
 
                 # IPMX Senders shall include source address information in the SDP object.
                 if sdp.primary_media.source_filter_src_address == "":
-                    return test.FAIL("Sender {} source address information in the SDP object"
+                    return test.FAIL("Sender {} missing source address information in the SDP object"
                                      .format(sender["id"]))
 
                 if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
@@ -1817,47 +1821,60 @@ class IpmxSdpTest(GenericTest):
                 # check the last two bytes to match the source address two equivalent bytes
                 if (int(multicast_ip.split(".")[2]) != int(source_ip.split(".")[2]) or
                         int(multicast_ip.split(".")[3]) != int(source_ip.split(".")[3])):
-                    return test.FAIL("Sender {} destination IP {} and source IP {} do not match on"
+                    return test.FAIL("Sender {} destination IP {} and source IP {} do not match on "
                                      "C and/or D bytes of 239.S.C.D encoding"
                                      .format(sender["id"], multicast_ip, source_ip))
 
-                # deactivate the sender
+                # deactivate the sender and test multicast ranges, ensuring cleanup in finally block
                 url = "single/senders/{}/staged".format(sender["id"])
-                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
-                    "master_enable": False,
-                    "activation": {"mode": "activate_immediate"}
-                })
-                if not valid:
-                    return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
 
-                # Now we test the multicast range supported keeping the master_enable to false but setting
-                # various multicast addresses at the base, end and random middle point of the various ranges
-                # to test.
-                ip_to_test_with_success = [
-                    "239.0.0.0",
-                    "239.255.255.255",
-                    MulticastUtils.getRandomIpv4AddressWithinRange("239.0.0.0", "239.255.255.255")]
-
-                for ip in ip_to_test_with_success:
+                try:
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": False,
                         "activation": {"mode": "activate_immediate"}
                     })
                     if not valid:
-                        return test.FAIL("Sender {} fail to set a valid multicast address {}"
-                                         .format(sender["id"], ip))
+                        return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
 
-                ip_to_test_with_failure = ["224.0.0.0",
-                                           "224.0.1.255",
-                                           MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
+                    # Now we test the multicast range supported keeping the master_enable to false but setting
+                    # various multicast addresses at the base, end and random middle point of the various ranges
+                    # to test.
+                    ip_to_test_with_success = [
+                        "239.0.0.0",
+                        "239.255.255.255",
+                        MulticastUtils.getRandomIpv4AddressWithinRange("239.0.0.0", "239.255.255.255")]
 
-                for ip in ip_to_test_with_failure:
+                    for ip in ip_to_test_with_success:
+                        valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                            "master_enable": False,
+                            "transport_params": [{"destination_ip": ip}],
+                            "activation": {"mode": "activate_immediate"}
+                        })
+                        if not valid:
+                            return test.FAIL("Sender {} failed to set a valid multicast address {}"
+                                             .format(sender["id"], ip))
+
+                    ip_to_test_with_failure = ["224.0.0.0",
+                                               "224.0.1.255",
+                                               MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
+
+                    for ip in ip_to_test_with_failure:
+                        valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                            "master_enable": False,
+                            "transport_params": [{"destination_ip": ip}],
+                            "activation": {"mode": "activate_immediate"}
+                        })
+                        if valid:
+                            return test.FAIL("Sender {} accepted an invalid multicast address {}".format(sender["id"], ip))
+                finally:
+                    # Always try to re-activate the sender with its original multicast address (best effort)
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
-                        "master_enable": False,
+                        "master_enable": True,
+                        "transport_params": [{"destination_ip": multicast_ip}],
                         "activation": {"mode": "activate_immediate"}
                     })
-                    if valid:
-                        return test.FAIL("Sender {} accepted an invalid multicast address {}".format(sender["id"], ip))
+                    if not valid:
+                        print("WARNING: Sender {} could not be re-activated with its original multicast address".format(sender["id"]))
 
             if len(senders) > 0:
                 return test.PASS()
@@ -1906,8 +1923,13 @@ class IpmxSdpTest(GenericTest):
                 # We require an active receiver proving that it can srteazm with the default multicast address
                 url = "single/receivers/{}/staged".format(receiver["id"])
                 if not active["master_enable"]:
-                    return test.FAIL("Receiver {}is not active. This test requires an active receiver with "
+                    return test.FAIL("Receiver {} is not active. This test requires an active receiver with "
                                      "a default multicast address".format(receiver["id"]))
+
+                # Check that the device is not using redundancy (simplication for this test)
+                if len(active["transport_params"]) > 1:
+                    return test.FAIL("Receiver {} is using redundancy and multiple transport parameters. Disable redundancy and re-test."
+                                     .format(receiver["id"]))
 
                 # Check the multicast address of the transport parameters
                 primary_transport_params = active["transport_params"][0]
@@ -1940,7 +1962,7 @@ class IpmxSdpTest(GenericTest):
                 # check the last two bytes to match the source address two equivalent bytes
                 if (int(multicast_ip.split(".")[2]) != int(source_ip.split(".")[2]) or
                         int(multicast_ip.split(".")[3]) != int(source_ip.split(".")[3])):
-                    return test.FAIL("Receiver {} destination IP {} and source IP {} do not match on"
+                    return test.FAIL("Receiver {} destination IP {} and source IP {} do not match on "
                                      "C and/or D bytes of 239.S.C.D encoding"
                                      .format(receiver["id"], multicast_ip, source_ip))
 
@@ -1953,7 +1975,7 @@ class IpmxSdpTest(GenericTest):
                 if not valid:
                     return test.FAIL("Receiver {} cannot deactivate the receiver".format(receiver["id"]))
 
-                # Now we test the multicast range supported keeping the master_enable to fasle but setting
+                # Now we test the multicast range supported keeping the master_enable to false but setting
                 # various multicast addresses at the base, end and random middle point of the various ranges
                 # to test.
                 ip_to_test_with_success = [
@@ -1967,10 +1989,11 @@ class IpmxSdpTest(GenericTest):
                 for ip in ip_to_test_with_success:
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": False,
+                        "transport_params": [{"multicast_ip": ip}],
                         "activation": {"mode": "activate_immediate"}
                     })
                     if not valid:
-                        return test.FAIL("Receiver {} fail to set a valid multicast address {}"
+                        return test.FAIL("Receiver {} failed to set a valid multicast address {}"
                                          .format(receiver["id"], ip))
 
                 ip_to_test_with_failure = [
@@ -1981,6 +2004,7 @@ class IpmxSdpTest(GenericTest):
                 for ip in ip_to_test_with_failure:
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": False,
+                        "transport_params": [{"multicast_ip": ip}],
                         "activation": {"mode": "activate_immediate"}
                     })
                     if valid:
