@@ -55,10 +55,10 @@ CONFIG.IS11_REFERENCE_SENDER_NODE_API_URL = "http://10.208.10.64:5050/x-nmos/nod
 
 # Network interface connected to the media network (for PCAP capture)
 # Run ipconfig and check the the interface name connected to the media network
-MULTICAST_INTERFACE = "NIC3"
+CONFIG.MULTICAST_INTERFACE = "NIC3"
 
 # Setup to a multicast address that is known not to be used by any DuT
-MULTICAST_STREAM_TARGET=239.0.0.0
+CONFIG.MULTICAST_STREAM_TARGET=239.0.0.0
 
 - Run IPMX-SETUP-XYZ.bat
 - Run the IS-04 test suite on your Receiver
