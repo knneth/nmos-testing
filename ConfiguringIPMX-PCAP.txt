@@ -1,0 +1,19 @@
+The IPMX-PCAP.bat file uses dumpcap tool from wireshark
+When IPMX-PCAP is ready to capture the PCAP file it actually call another batch file called start_capture_pcap.bat
+
+The command line to start dumpcap is in there and it uses some parameters to try and ensur ethe pcap created will not have drop packets
+the default command line used is "dumpcap -q -i 2 -B 256 -a duration:3 -w %1"
+
+The -i option selects the network port to use on the computer to do the pcap capture
+
+you will need to change the vale to match you system.
+First run "dumpcap -D"
+you will get and output like this:
+1. \Device\NPF_{18E20BCD-B85F-4712-9587-94B0F71A8EDE} (Local Area Connection* 7)
+2. \Device\NPF_{CFBD402B-BE90-47D9-AD5E-BD24D053873D} (NIC4)
+3. \Device\NPF_{6B0852E9-0E07-4BA4-BD42-7B852D9B75DB} (NIC3)
+4. \Device\NPF_{030FC293-B42B-4D0E-8282-28BA2551F9C0} (NIC1)
+
+If you wanted to use NIC1 for your pcap capture for this system , the value of the -i option would be 4
+You would edit start_capture_pcap.bat and change the -i 2 to -i 4 like this:
+dumpcap -q -i 4 -B 256 -a duration:3 -w %1

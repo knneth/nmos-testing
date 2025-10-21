@@ -4,9 +4,17 @@ from . import Config as CONFIG
 def filter_resources(resources, resource_type):
 
     if resource_type == "senders":
+        try:
+            print("#### FILTER senders", CONFIG.senders_guid)
+        except Exception as e:
+            CONFIG.senders_guid = None
         print("#### FILTER senders", CONFIG.senders_guid)
 
     if resource_type == "receivers":
+        try:
+            print("#### FILTER receivers", CONFIG.receivers_guid)
+        except Exception as e:
+            CONFIG.receivers_guid = None
         print("#### FILTER receivers", CONFIG.receivers_guid)
 
     if not isinstance(resources, list):

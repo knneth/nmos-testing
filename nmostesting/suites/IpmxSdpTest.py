@@ -420,7 +420,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], href, e))
@@ -710,7 +713,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], href, e))
@@ -1508,10 +1514,11 @@ class IpmxSdpTest(GenericTest):
                         return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
                                          .format(sender["id"], manifest_href, manifest_href_response))
 
+                    print(manifest_href_response.text)
+
                         if (manifest_href_response.text is None or
                                 manifest_href_response.text == "" or
                                 manifest_href_response.text.isspace()):
-
                             sdp_retry -= 1
                             if sdp_retry <= 0:
                                 return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
@@ -1526,7 +1533,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], manifest_href, e))
@@ -1608,14 +1618,24 @@ class IpmxSdpTest(GenericTest):
                 pcap_filename = format + "-{}.pcap".format(sender["id"])
                 sdp_filename = format + "-{}.sdp".format(sender["id"])
 
-                # Get the directory of this script and look for capture scripts in parent directory
+                # Get the directory of this script for capture scripts, and use vendor-specific directory for output files
                 script_dir = os.path.dirname(os.path.abspath(__file__))
-                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory (for scripts)
 
-                # Remove the files
+                # Use IPMX_VENDOR environment variable to determine output directory, fallback to parent_dir if not set
+                ipmx_vendor = os.environ.get('IPMX_VENDOR')
+                if ipmx_vendor and ipmx_vendor != "":
+                    output_dir = f'IPMX_VENDOR_{ipmx_vendor}'
+                    # Ensure output directory exists
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                else:
+                    output_dir = parent_dir  # Fallback to original behavior
+
+                # Remove the files from output directory
                 try:
-                    os.remove(os.path.join(parent_dir, pcap_filename))
-                    os.remove(os.path.join(parent_dir, sdp_filename))
+                    os.remove(os.path.join(output_dir, pcap_filename))
+                    os.remove(os.path.join(output_dir, sdp_filename))
                 except Exception:
                     pass  # ignore if file not found
 
@@ -1624,11 +1644,13 @@ class IpmxSdpTest(GenericTest):
                 try:
                     if platform.system() == "Windows":
                         capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
-                        tcpdump_process = subprocess.Popen([capture_script, pcap_filename])
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path])
                     else:
                         capture_script = os.path.join(parent_dir, "start_capture_pcap.sh")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
                         # Run through bash explicitly to avoid exec format errors
-                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_filename])
+                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path])
 
                     print("Started packet capture: {}".format(pcap_filename))
 
@@ -1653,7 +1675,7 @@ class IpmxSdpTest(GenericTest):
                 except Exception as e:
                     return test.FAIL("Failed to stop packet capture, error: {}".format(e))
 
-                with open(os.path.join(parent_dir, sdp_filename), 'wb') as file:
+                with open(os.path.join(output_dir, sdp_filename), 'wb') as file:
                     file.write(manifest_href_response.content)
                 time.sleep(1)
 
@@ -1752,7 +1774,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], manifest_href, e))
@@ -1854,9 +1879,10 @@ class IpmxSdpTest(GenericTest):
                             return test.FAIL("Sender {} failed to set a valid multicast address {}"
                                              .format(sender["id"], ip))
 
-                    ip_to_test_with_failure = ["224.0.0.0",
-                                               "224.0.1.255",
-                                               MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
+                    ip_to_test_with_failure = [
+                        "224.0.0.0",
+                        "224.0.1.255",
+                        MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
 
                     for ip in ip_to_test_with_failure:
                         valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
