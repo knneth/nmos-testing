@@ -1500,7 +1500,7 @@ class IpmxSdpTest(GenericTest):
 
                     active = response.json()
 
-                sdp_retry = 5
+                sdp_retry = 3
                 while True:
                     manifest_href = "single/senders/{}/transportfile".format(sender["id"])
                     manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
@@ -1514,19 +1514,17 @@ class IpmxSdpTest(GenericTest):
                         return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
                                          .format(sender["id"], manifest_href, manifest_href_response))
 
-                    print(manifest_href_response.text)
-
-                        if (manifest_href_response.text is None or
-                                manifest_href_response.text == "" or
-                                manifest_href_response.text.isspace()):
-                            sdp_retry -= 1
-                            if sdp_retry <= 0:
-                                return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
-                                                 .format(sender["id"]))
-                            else:
-                                time.sleep(2)
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
                         else:
-                            break
+                            time.sleep(2)
+                    else:
+                        break
 
                 # Create an SDP object and parse the text into it. There must be at least a primary media
                 # (no redundancy)
@@ -1674,6 +1672,48 @@ class IpmxSdpTest(GenericTest):
                     print("Stopped packet capture: {}".format(pcap_filename))
                 except Exception as e:
                     return test.FAIL("Failed to stop packet capture, error: {}".format(e))
+
+                # We must get the SDP transport file again to get the final PEP parameters that
+                # become final on activation with master_enable set to true. We are not expecting
+                # any changes in the SDP transport file after activation with master_enable set to true.
+                sdp_retry = 2
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    print(manifest_href_response.text)
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
 
                 with open(os.path.join(output_dir, sdp_filename), 'wb') as file:
                     file.write(manifest_href_response.content)
