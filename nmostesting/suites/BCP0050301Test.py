@@ -490,7 +490,8 @@ class BCP0050301Test(GenericTest):
                         sdp_lines = [sdp_line.replace("\r", "") for sdp_line in manifest_href_response.text.split("\n")]
 
                         ok, msg = self.check_privacy_attribute(True, sender, len(constraints),
-                                                               constraints[0], active["transport_params"][0], sdp_lines, null_mode)
+                                                               constraints[0], active["transport_params"][0],
+                                                               sdp_lines, null_mode)
                         if not ok:
                             return test.FAIL("sender {} : invalid privacy capability, error {}"
                                              .format(sender["id"], msg))
@@ -2657,7 +2658,7 @@ class BCP0050301Test(GenericTest):
             allowed_rtp_modes = ("AES-128-CTR", "AES-256-CTR", "AES-128-CTR_CMAC-64", "AES-256-CTR_CMAC-64",
                                  "AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD", "ECDH_AES-128-CTR",
                                  "ECDH_AES-256-CTR", "ECDH_AES-128-CTR_CMAC-64", "ECDH_AES-256-CTR_CMAC-64",
-                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD", "NULL" )
+                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD", "NULL")
             allowed_usb_modes = ("AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD",
                                  "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD", "NULL")
         else:
@@ -3076,7 +3077,7 @@ class BCP0050301Test(GenericTest):
         else:
             return False, warning
 
-    def check_privacy_attribute(self, is_sender, sender_receiver, legs, constraints, active, sdp_lines, null_mode): 
+    def check_privacy_attribute(self, is_sender, sender_receiver, legs, constraints, active, sdp_lines, null_mode):
 
         if is_sender:
             identity = "sender"
@@ -3190,7 +3191,7 @@ class BCP0050301Test(GenericTest):
                     return False, msg
 
         if (not null_mode and ((found_session > 1) or (found_media != 0 and found_media != legs)
-                or (found_session == 0 and found_media == 0))):
+                               or (found_session == 0 and found_media == 0))):
             msg = "{} {} : missing privacy session/media attribute(s) in SDP transport file, " \
                 "found {} session level, {} media level, has {} legs".format(
                     identity, sender_receiver["id"], found_session, found_media, legs)
@@ -3230,7 +3231,6 @@ class BCP0050301Test(GenericTest):
             if not null_mode and (not found_short or not found_full):
                 return False, "{} {} : extmap attributes for PEP extension headers are missing".format(
                     identity, sender_receiver["id"])
-
 
             if null_mode and (found_short or found_full):
                 return False, "{} {} : extmap attributes for PEP extension headers are invalid".format(

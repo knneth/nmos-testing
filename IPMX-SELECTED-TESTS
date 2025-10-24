@@ -10,13 +10,13 @@ RECEIVER: auto test_04 test_07 test_11 test_17 test_18 test_19 test_20  test_23 
 
 SENDER: auto test_04 test_07 test_08 test_09 test_10 test_17 test_18 test_19 test_20 test_20_01 test_23 test_24 test_24_01 test_26 test_28
 
-EXAMPLE: python3 nmos-test.py suite IS-04-01 --tests auto test_04 test_07 test_08 test_09 test_10 test_11 test_17 test_18 test_19 test_20 test_20_01 test_23 test_24 test_24_01 test_25 test_26 test_28 --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IS-04-01 --tests auto test_04 test_07 test_08 test_09 test_10 test_11 test_17 test_18 test_19 test_20 test_20_01 test_23 test_24 test_24_01 test_25 test_26 test_28 --host 127.0.0.1 --port 5010 --version v1.3 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 IS-04-03:
 
 test_01
 
-EXAMPLE: python3 nmos-test.py suite IS-04-03 --tests test_01 --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IS-04-03 --tests test_01 --host 127.0.0.1 --port 5010 --version v1.3 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 IS-05-01:
 
@@ -30,7 +30,7 @@ RECEIVER: auto test_10 test_12 test_12_01 test_12_02 test_14 test_32 test_40 tes
 
 SENDER: auto test_09 test_09_01 test_11 test_11_01 test_11_02 test_13 test_31 test_40 test_15 test_17 test_19 test_22 test_23 test_23_01 test_25 test_38 test_42 test_34 test_36
 
-EXAMPLE: python3 nmos-test.py suite IS-05-01 --tests auto test_09 test_09_01 test_10 test_11 test_11_01 test_11_02 test_12 test_12_01 test_12_02 test_13 test_14 test_31 test_32 test_40 test_15 test_17 test_19 test_22 test_23 test_23_01 test_25 test_38 test_42 test_16 test_18 test_20 test_21 test_24 test_24_01 test_26 test_39 test_34 test_36 test_35 test_37 --host 127.0.0.1 --port 5010 --version v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IS-05-01 --tests auto test_09 test_09_01 test_10 test_11 test_11_01 test_11_02 test_12 test_12_01 test_12_02 test_13 test_14 test_31 test_32 test_40 test_15 test_17 test_19 test_22 test_23 test_23_01 test_25 test_38 test_42 test_16 test_18 test_20 test_21 test_24 test_24_01 test_26 test_39 test_34 test_36 test_35 test_37 --host 127.0.0.1 --port 5010 --version v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 IS-05-02:
 
@@ -43,19 +43,19 @@ RECEIVER: test_01 test_02 test_03 test_05 test_07 test_12
 
 SENDER: test_01 test_02 test_04 test_06 test_09 test_12 test_13 test_14 test_15 test_16 test_17
 
-EXAMPLE: python3 nmos-test.py suite IS-05-02 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_09 test_12 test_13 test_14 test_15 test_16 test_17 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IS-05-02 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_09 test_12 test_13 test_14 test_15 test_16 test_17 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-004-01-01 (Receiver Capabilities):
 
 test_01 test_02
 
-EXAMPLE: python3 nmos-test.py suite BCP-004-01-01 --tests test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-004-01-01 --tests test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-004-02-01 (Sender Capabilities):
 
 test_01 test_02
 
-EXAMPLE: python3 nmos-test.py suite BCP-004-02-01 --tests test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-004-02-01 --tests test_01 test_02 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-005-02-01 (HKEP):
 
@@ -65,7 +65,7 @@ RECEIVER: test_01 test_03
 
 SENDER: test_01 test_02
 
-EXAMPLE: python3 nmos-test.py suite BCP-005-02-01 --tests test_01 test_02 test_03  --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-005-02-01 --tests test_01 test_02 test_03  --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-005-03-01 (PEP):
 
@@ -75,7 +75,7 @@ RECEIVER: test_01 test_04 test_05 test_07 test_09 test_11
 
 SENDER: test_01 test_02 test_03 test_06 test_08 test_10
 
-EXAMPLE: python3 nmos-test.py suite BCP-005-03-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_09 test_10 test_11 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-005-03-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_09 test_10 test_11 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 IS-11-01:
 
@@ -83,7 +83,7 @@ all
 
 Need to parse the results based on the config to know what is acceptable or not.
 
-EXAMPLE: python3 nmos-test.py suite IS-11-01 --tests all --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 5010 5010 5010 --version v1.0 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IS-11-01 --tests all --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 5010 5010 5010 --version v1.0 v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
  
 IpmxSdpTest:
 
@@ -93,7 +93,7 @@ RECEIVER: test_04 test_06 test_08 test_11
 
 SENDER: test_02 test_03 test_04 test_05 test_07 test_11
 
-EXAMPLE: python3 nmos-test.py suite IPMX-Sdp --tests test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_11 --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 8443 5010 5010 --version v1.3 v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite IPMX-Sdp --tests test_02 test_03 test_04 test_05 test_06 test_07 test_08 test_11 --host 127.0.0.1 127.0.0.1 127.0.0.1 --port 8443 5010 5010 --version v1.3 v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-006-01-01 (JPEG-XS):
 
@@ -103,7 +103,7 @@ RECEIVER: test_01 test_06 test_07
 
 SENDER: test_01 test_02 test_03 test_04 test_05
 
-EXAMPLE: python3 nmos-test.py suite BCP-006-01-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07  --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-006-01-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07  --host 127.0.0.1 --port 5010 --version v1.3 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-006-02-01 (H.264):
 
@@ -113,7 +113,7 @@ RECEIVER: test_01 test_06 test_07
 
 SENDER: test_01 test_02 test_03 test_04 test_05
 
-EXAMPLE: python3 nmos-test.py suite BCP-006-02-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-006-02-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 --host 127.0.0.1 --port 5010 --version v1.3 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-006-03-01 (H.265):
 
@@ -123,7 +123,7 @@ RECEIVER: test_01 test_06 test_07
 
 SENDER: test_01 test_02 test_03 test_04 test_05
 
-EXAMPLE: python3 nmos-test.py suite BCP-006-03-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 --host 127.0.0.1 --port 5010 --version v1.3 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-006-03-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 --host 127.0.0.1 --port 5010 --version v1.3 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
 
 BCP-007-02-01 (USB):
 
@@ -133,4 +133,4 @@ RECEIVER: test_01 test_06 test_07 test_12 test_13
 
 SENDER: test_01 test_02 test_03 test_04 test_05 test_10 test_11
 
-EXAMPLE: python3 nmos-test.py suite BCP-007-02-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_10 test_11 test_12 test_13 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders ipmx-test-senders.guid --receivers ipmx-test-receivers.guid
+EXAMPLE: python3 nmos-test.py suite BCP-007-02-01 --tests test_01 test_02 test_03 test_04 test_05 test_06 test_07 test_10 test_11 test_12 test_13 --host 127.0.0.1 127.0.0.1 --port 5010 5010 --version v1.3 v1.1 --senders IPMX_VENDOR_Local/ipmx-test-senders.guid --receivers IPMX_VENDOR_Local/ipmx-test-receivers.guid
