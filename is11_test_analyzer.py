@@ -680,8 +680,11 @@ def main():
             without_receivers=without_receivers
         )
 
-    analyzer = IS11TestAnalyzer(args.json_file, env_spec)
-    success = analyzer.run_analysis()
+    try:
+        analyzer = IS11TestAnalyzer(args.json_file, env_spec)
+        success = analyzer.run_analysis()
+    except Exception as e:
+        print(f"ERROR: {e}")
 
     sys.exit(0 if success else 1)
 

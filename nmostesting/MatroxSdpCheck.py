@@ -451,7 +451,11 @@ def check_sdp_st2110_22(md: MediaDescriptor) -> None:
     if md.height == 0 or md.height > 32767:
         raise SdpCheckError("ST2110-22 invalid height")
     
-    valid_senders = {MatroxSdpEnums.SenderType2110TPNL, MatroxSdpEnums.SenderType2110TPW}
+    if md.smpte_standard_number == "ST2110-22:2022":
+        valid_senders = {MatroxSdpEnums.SenderType2110TPNL, MatroxSdpEnums.SenderType2110TPW, MatroxSdpEnums.SenderType2110TPN}
+    else:
+        valid_senders = {MatroxSdpEnums.SenderType2110TPNL, MatroxSdpEnums.SenderType2110TPW}
+
     if md.sender_type not in valid_senders:
         raise SdpCheckError("ST2110-22 invalid TP")
     

@@ -352,33 +352,40 @@ class SDPValidationScript:
                     issues.append(f"{config_key}: conversion error - {e}")
 
         # PTP Configuration Validation
-        if 'ptp' in self.config_data:
-            ptp = self.config_data['ptp'].lower() == 'true'
-            
-            print(f"\n--- PTP Configuration Validation (PTP Enabled: {ptp}) ---")
-            
-            if ptp:
-                # PTP enabled: ts_ref_clock_source must be "ptp" and media_clock_type must be "direct"
-                if media.ts_ref_clock_source != "ptp":
-                    issues.append(f"PTP enabled but ts_ref_clock_source is '{media.ts_ref_clock_source}', expected 'ptp'")
-                else:
-                    print(f"[OK] ts_ref_clock_source: 'ptp' (correct for PTP enabled)")
-                
-                if media.media_clock_type != "direct" and media.media_clock_type != "sender":
-                    issues.append(f"PTP enabled but media_clock_type is '{media.media_clock_type}', expected 'direct' or 'sender'")
-                else:
-                    print(f"[OK] media_clock_type: 'direct' or 'sender' (correct for PTP enabled)")
+        if 'PTP' in self.config_data:
+            ptp = self.config_data['PTP'].lower() == 'true'
+        else:
+            ptp = False
+
+        print(f"\n--- PTP Configuration Validation (PTP Enabled: {ptp}) ---")
+        
+        if ptp:
+            # PTP enabled: ts_ref_clock_source must be "ptp" and media_clock_type must be "direct"
+            if media.ts_ref_clock_source != "ptp":
+                issues.append(f"PTP enabled but ts_ref_clock_source is '{media.ts_ref_clock_source}', expected 'ptp'")
             else:
-                # PTP disabled: ts_ref_clock_source must be "localmac" and media_clock_type must be "sender"
-                if media.ts_ref_clock_source != "localmac":
-                    issues.append(f"PTP disabled but ts_ref_clock_source is '{media.ts_ref_clock_source}', expected 'localmac'")
-                else:
-                    print(f"[OK] ts_ref_clock_source: 'localmac' (correct for PTP disabled)")
-                
-                if media.media_clock_type != "sender":
-                    issues.append(f"PTP disabled but media_clock_type is '{media.media_clock_type}', expected 'sender'")
-                else:
-                    print(f"[OK] media_clock_type: 'sender' (correct for PTP disabled)")
+                print(f"[OK] ts_ref_clock_source: 'ptp' (correct for PTP enabled)")
+            
+            if media.media_clock_type != "direct" and media.media_clock_type != "sender":
+                issues.append(f"PTP enabled but media_clock_type is '{media.media_clock_type}', expected 'direct' or 'sender'")
+            else:
+                print(f"[OK] media_clock_type: 'direct' or 'sender' (correct for PTP enabled)")
+        else:
+            # PTP disabled: ts_ref_clock_source must be "localmac" and media_clock_type must be "sender"
+            if media.ts_ref_clock_source != "localmac":
+                issues.append(f"PTP disabled but ts_ref_clock_source is '{media.ts_ref_clock_source}', expected 'localmac'")
+            else:
+                print(f"[OK] ts_ref_clock_source: 'localmac' (correct for PTP disabled)")
+            
+            if media.media_clock_type != "sender":
+                issues.append(f"PTP disabled but media_clock_type is '{media.media_clock_type}', expected 'sender'")
+            else:
+                print(f"[OK] media_clock_type: 'sender' (correct for PTP disabled)")
+
+            if media.ts_ref_clock_local_mac_address.upper() != media.ts_ref_clock_local_mac_address:
+                issues.append(f"PTP disabled and localmac {media.ts_ref_clock_local_mac_address} is not in upper cases")
+            else:
+                print(f"[OK] localmac {media.ts_ref_clock_local_mac_address} is in upper cases (correct for PTP disabled)")
 
         # IPMX Validation
         print(f"\n--- IPMX Validation ---")

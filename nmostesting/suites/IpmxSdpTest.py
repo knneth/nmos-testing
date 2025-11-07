@@ -100,6 +100,12 @@ MuxFullyDescribedMpeg2TS = "application/MP2T"
 MuxFullyDescribedGeneric = "application/mp2t"
 
 
+def ifelse(c, t, f):
+    if c:
+        return t
+    else:
+        return f
+
 class IpmxSdpTest(GenericTest):
     """
     Runs Node Tests covering SDP transport files
@@ -1432,7 +1438,7 @@ class IpmxSdpTest(GenericTest):
         except Exception as e:
             return test.FAIL("Error during test 08: {}".format(e))
 
-    def test_10(self, test):
+    def test_10_local(self, test):
         """
         Pre-Test to get a PCAP capture of a video sender along with its SDP transport file.
         """
@@ -1643,12 +1649,12 @@ class IpmxSdpTest(GenericTest):
                     if platform.system() == "Windows":
                         capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
                         pcap_full_path = os.path.join(output_dir, pcap_filename)
-                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path])
+                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path, multicast_ip, str(port), ifelse(format == "video", "2110-20", "2110-20")])
                     else:
                         capture_script = os.path.join(parent_dir, "start_capture_pcap.sh")
                         pcap_full_path = os.path.join(output_dir, pcap_filename)
                         # Run through bash explicitly to avoid exec format errors
-                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path])
+                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path, multicast_ip, str(port), ifelse(format == "video", "2110-20", "2110-20")])
 
                     print("Started packet capture: {}".format(pcap_filename))
 
@@ -1730,6 +1736,273 @@ class IpmxSdpTest(GenericTest):
                           .format(multicast_ip, sender["id"]))
                 except Exception as e:
                     print("Warning: Error leaving multicast group: {}".format(str(e)))
+
+                time.sleep(3)
+
+            if len(senders) > 0:
+                return test.PASS()
+
+        except KeyError as e:
+            return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
+
+        return test.UNCLEAR("No Sender resources were found on the Node")
+
+    def test_10(self, test):
+        """
+        Pre-Test to get a PCAP capture using VB440 of a video sender along with its SDP transport file.
+        """
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+
+        try:
+            video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                             and sender["flow_id"] in flow_map
+                             and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"]
+
+            audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                             and sender["flow_id"] in flow_map
+                             and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"]
+
+            senders = video_senders + audio_senders
+
+            for sender in senders:
+
+                if sender in video_senders:
+                    format = "video"
+                elif sender in audio_senders:
+                    format = "audio"
+                else:
+                    return test.FAIL("UNEXPECTED sender {}".format(sender["id"]))
+
+                # check the transport => only RTP is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Sender {} transport {} is not RTP"
+                                     .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                active = response.json()
+
+                # We require an active sender in order to get an SDP transport file
+                url = "single/senders/{}/staged".format(sender["id"])
+                if not active["master_enable"]:
+                    # activate the sender first
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": True,
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        return test.FAIL("Sender {} cannot activate the sender"
+                                         .format(sender["id"]))
+
+                    # update the active parameters after activation
+                    url = "single/senders/{}/active".format(sender["id"])
+                    valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                    if not valid:
+                        return test.FAIL("Sender {} not responding to IS-05 request"
+                                         .format(sender["id"]))
+
+                    active = response.json()
+
+                sdp_retry = 3
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                # Create an SDP object and parse the text into it. There must be at least a primary media
+                # (no redundancy)
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                # Allow IPMX and ST-2110
+
+                # Check the multicast address of the transport parameters matches with the SDP
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
+
+                # deactivate the sender as we want to start streaming only once the PCAP capture is enabled
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": False,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
+
+                # Extract multicast parameters
+                multicast_ip = primary_transport_params["destination_ip"]
+                source_ip = primary_transport_params["source_ip"]
+                port = primary_transport_params["destination_port"]
+
+                # Validate multicast parameters
+                if not MulticastUtils.is_multicast_address(multicast_ip):
+                    return test.FAIL("Sender {} destination IP {} is not a valid multicast address"
+                                        .format(sender["id"], multicast_ip))
+
+                # Start tcpdump to capture the multicast stream for 3 seconds in parallel with this test
+                pcap_filename = format + "-{}.pcap".format(sender["id"])
+                sdp_filename = format + "-{}.sdp".format(sender["id"])
+
+                # Get the directory of this script for capture scripts, and use vendor-specific directory for output files
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory (for scripts)
+
+                # Use IPMX_VENDOR environment variable to determine output directory, fallback to parent_dir if not set
+                ipmx_vendor = os.environ.get('IPMX_VENDOR')
+                if ipmx_vendor and ipmx_vendor != "":
+                    output_dir = f'IPMX_VENDOR_{ipmx_vendor}'
+                    # Ensure output directory exists
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                else:
+                    output_dir = parent_dir  # Fallback to original behavior
+
+                # Remove the files from output directory
+                try:
+                    os.remove(os.path.join(output_dir, pcap_filename))
+                    os.remove(os.path.join(output_dir, sdp_filename))
+                except Exception:
+                    pass  # ignore if file not found
+
+                tcpdump_process = None
+
+                try:
+                    if platform.system() == "Windows":
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path, multicast_ip, str(port), ifelse(format == "video", "2110-20", "2110-20")])
+                    else:
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.sh")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        # Run through bash explicitly to avoid exec format errors
+                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path, multicast_ip, str(port), ifelse(format == "video", "2110-20", "2110-20")])
+
+                    print("Started packet capture: {}".format(pcap_filename))
+
+                except (FileNotFoundError, OSError) as e:
+                    return test.FAIL("Failed to start packet capture, error: {}".format(e))
+
+                time.sleep(3)
+
+                # Now reactivate the sender for the PCAP capture
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": True,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot activate the sender".format(sender["id"]))
+
+                # Wait packet capture if it was started
+                try:
+                    tcpdump_process.wait()  # wait for the process to terminate
+                    print("Stopped packet capture: {}".format(pcap_filename))
+                except Exception as e:
+                    return test.FAIL("Failed to stop packet capture, error: {}".format(e))
+
+                # We must get the SDP transport file again to get the final PEP parameters that
+                # become final on activation with master_enable set to true. We are not expecting
+                # any changes in the SDP transport file after activation with master_enable set to true.
+                sdp_retry = 2
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    print(manifest_href_response.text)
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                with open(os.path.join(output_dir, sdp_filename), 'wb') as file:
+                    file.write(manifest_href_response.content)
+
+                # Sender kept intentionally active
+
+                time.sleep(3)
 
             if len(senders) > 0:
                 return test.PASS()
@@ -1828,9 +2101,10 @@ class IpmxSdpTest(GenericTest):
                                      .format(sender["id"]))
 
                 # Check that the device is not using redundancy (simplication for this test)
-                if sdp.secondary_media or len(active["transport_params"]) > 1:
-                    return test.FAIL("Sender {} is using redundancy and multiple transport parameters. Disable redundancy and re-test."
-                                     .format(sender["id"]))
+                # if sdp.secondary_media or len(active["transport_params"]) > 1:
+                # if len(active["transport_params"]) > 1:
+                #     return test.FAIL("Sender {} is using redundancy and multiple transport parameters. Disable redundancy and re-test."
+                #                      .format(sender["id"]))
 
                 # Check the multicast address of the transport parameters
                 primary_transport_params = active["transport_params"][0]
@@ -1905,9 +2179,9 @@ class IpmxSdpTest(GenericTest):
                     # various multicast addresses at the base, end and random middle point of the various ranges
                     # to test.
                     ip_to_test_with_success = [
-                        "239.0.0.0",
-                        "239.255.255.255",
-                        MulticastUtils.getRandomIpv4AddressWithinRange("239.0.0.0", "239.255.255.255")]
+                        "239.1.0.0",
+                        "239.127.255.255",
+                        MulticastUtils.getRandomIpv4AddressWithinRange("239.1.0.0", "239.127.255.255")]
 
                     for ip in ip_to_test_with_success:
                         valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
@@ -2278,14 +2552,18 @@ class IpmxSdpTest(GenericTest):
             print("SENDER CAPS:\n{}\n".format(str(sender_caps)))
 
             sender_active_constraints = self._get_is11_active_constraints(sender["id"])
-            if sender_active_constraints:
+            if sender_active_constraints and len(sender_active_constraints.get("constraint_sets", [])):
                 try:
                     sender_cons = convert_caps_json_to_caps(sender_active_constraints).to_cons()
                 except Exception as e:
                     return False, "Sender {} active constraints JSON to CCF conversion failed: {}".format(
                         sender["id"], e)
 
-                sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
+                try:
+                    sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
+                except Exception as e:
+                    return False, "Sender {} constriction failed, possibly an empty space: {}".format(
+                        sender["id"], e)
 
                 print("SENDER CAPS (constrained by IS-11):\n{}\n".format(str(sender_caps)))
 

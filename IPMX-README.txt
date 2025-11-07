@@ -3,7 +3,7 @@ IPMX NMOS Testing Package
 
 This folder contains the IPMX NMOS Testing package. Follow these instructions to install the required python environment. These instructions assume a Windows environment but the test suite can also run under Linux if you change the Windows batch file for Linux scripts. For Windows use a regular Command Prompt; do NOT use PowerShell.
 
-- Uncompress the archive into the folder IPMX-Testing-10
+- Uncompress the archive into the folder IPMX-Testing-12-PCAP
 
 - Install the latest python3 executables on your system
 - Install the GIT executables on your system
@@ -60,8 +60,9 @@ CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL = "http://10.208.10.64:5050/x-nm
 CONFIG.IS11_REFERENCE_SENDER_NODE_API_URL = "http://10.208.10.64:5050/x-nmos/node/v1.3/"
 
 # Network interface connected to the media network (for PCAP capture)
-# Run ipconfig and check the the interface name connected to the media network
-CONFIG.MULTICAST_INTERFACE = "NIC3"
+CONFIG.MULTICAST_INTERFACE = "any"
+
+Read ConfiguringIPMX-PCAP.txt for information about how to configure start_capture_pcap.bat
 
 # Setup to a multicast address that is known not to be used by any DuT
 CONFIG.MULTICAST_STREAM_TARGET=239.1.0.100

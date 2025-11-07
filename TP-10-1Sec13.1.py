@@ -12,6 +12,10 @@ except Exception:
     print("Error: Requires pyshark (and tshark). Install with: pip install pyshark", file=sys.stderr)
     raise
 
+import asyncio
+loop = asyncio.ProactorEventLoop()
+asyncio.set_event_loop(loop)
+
 def load_config(path: Path) -> dict:
     data = {}
     for ln in path.read_text(encoding="utf-8", errors="ignore").splitlines():

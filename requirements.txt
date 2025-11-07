@@ -20,3 +20,4 @@ Flask-Cors
 flask-socketio
 pycryptodome
 xeger
+pyshark

@@ -7,6 +7,13 @@ from typing import Dict, Deque, Tuple, Optional, List
 #   pip install pyshark
 import pyshark
 
+import asyncio
+loop = asyncio.ProactorEventLoop()
+asyncio.set_event_loop(loop)
+
+from datetime import datetime  # Add this import at the top of your file
+from typing import Optional
+
 USAGE = "Usage: python TP-10-1Sec13.3b.py <config.cfg> <file.pcap>"
 
 def load_config(path: str):
@@ -106,15 +113,41 @@ def udp_payload_bytes(pkt) -> Optional[bytes]:
 
 def pkt_time_seconds(pkt) -> Optional[float]:
     """Get packet capture time in seconds (float) from the pcap."""
-    try:
-        if hasattr(pkt, "sniff_timestamp") and pkt.sniff_timestamp:
-            return float(pkt.sniff_timestamp)
-    except Exception:
-        pass
-    try:
-        return float(pkt.frame_info.time_epoch)
-    except Exception:
-        return None
+    def parse_time_str(ts_str: str) -> Optional[float]:
+        """Helper to parse ISO string or float."""
+        if ts_str is None:
+            return None
+        try:
+            return float(ts_str)  # If already numeric string/float
+        except (ValueError, TypeError):
+            pass
+        
+        # Handle ISO format: replace 'Z' with '+00:00' for UTC
+        if isinstance(ts_str, str) and ts_str.endswith('Z'):
+            ts_str = ts_str[:-1] + '+00:00'
+        
+        try:
+            dt = datetime.fromisoformat(ts_str)
+            return dt.timestamp()  # Returns float Unix time
+        except ValueError:
+            return None
+
+    # Try sniff_timestamp first
+    if hasattr(pkt, "sniff_timestamp") and pkt.sniff_timestamp is not None:
+        result = parse_time_str(pkt.sniff_timestamp)
+        if result is not None:
+            #print("Using sniff_timestamp")
+            return result
+
+    # Fallback to frame_info.time_epoch
+    if hasattr(pkt, "frame_info") and pkt.frame_info and hasattr(pkt.frame_info, "time_epoch"):
+        result = parse_time_str(pkt.frame_info.time_epoch)
+        if result is not None:
+            #print("Using frame_info.time_epoch")
+            return result
+
+    print("Failed to parse any timestamp")
+    return None
 
 # -------- RTCP parsing (RFC 3550) --------
 def parse_rtcp_compound_for_srs(b: bytes) -> List[Tuple[int, int]]:
