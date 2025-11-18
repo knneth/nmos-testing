@@ -1072,7 +1072,7 @@ class HKEPDissector:
 
         return messages
 
-    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_12_6: bool = False, validate_12_7: bool = False, validate_13_1: bool = False, validate_13_2: bool = False, validate_13_3: bool = False) -> HKEPAnalysisResult:
+    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_12_6: bool = False, validate_12_7: bool = False, validate_13_1: bool = False, validate_13_2: bool = False, validate_13_3: bool = False, validate_session_caching: bool = False, ignore_slot_limits: bool = False) -> HKEPAnalysisResult:
         """
         Analyze PCAP file for HKEP messages
 
@@ -1081,6 +1081,13 @@ class HKEPDissector:
             verbose: Print results to console
             handle_reassembly: Enable TCP stream reassembly (recommended)
             show_tcp_issues: Show warnings for TCP reassembly issues (default: False)
+            validate_12_6: Enable validation for section 12.6
+            validate_12_7: Enable validation for section 12.7
+            validate_13_1: Enable validation for section 13.1
+            validate_13_2: Enable validation for section 13.2
+            validate_13_3: Enable validation for section 13.3
+            validate_session_caching: Enable session caching validation
+            ignore_slot_limits: If True, ignore pairingSlots and sessionSlots values and assume infinite slots (default: False)
 
         Returns:
             HKEPAnalysisResult containing grouped HKEP exchanges and messages
@@ -1125,6 +1132,8 @@ class HKEPDissector:
         self._validate_13_1 = validate_13_1
         self._validate_13_2 = validate_13_2
         self._validate_13_3 = validate_13_3
+        self._validate_session_caching = validate_session_caching
+        self._ignore_slot_limits = ignore_slot_limits
         
         # Use proper TCP stream reassembly
         if handle_reassembly:
@@ -1795,6 +1804,16 @@ class HKEPDissector:
                             violation_map[pkt_num] = []
                         violation_map[pkt_num].append(error)
         
+        if hasattr(self, '_validate_session_caching') and self._validate_session_caching:
+            # Session caching validation works across all exchanges
+            errors = self.validate_session_caching(analysis_result)
+            for error in errors:
+                pkt_num = error.get('packet_number')
+                if pkt_num:
+                    if pkt_num not in violation_map:
+                        violation_map[pkt_num] = []
+                    violation_map[pkt_num].append(error)
+        
         # Sort timeline events by packet number (chronological order)
         timeline_events.sort(key=lambda x: (x['pkt_num'], x.get('timestamp', 0)))
         
@@ -1850,7 +1869,7 @@ class HKEPDissector:
         Args:
             analysis_result: Analysis result containing exchanges
             verbose: Print validation results
-            section: Section to validate ("12.6", "12.7", "13.1", "13.2", or "13.3")
+            section: Section to validate ("12.6", "12.7", "13.1", "13.2", "13.3", or "session_caching")
         
         Returns:
             Dictionary with validation results
@@ -1875,6 +1894,56 @@ class HKEPDissector:
         elif section == "13.3":
             validate_func = self.validate_section_13_3
             section_name = "13.3"
+        elif section == "session_caching":
+            # Session caching validation works on all exchanges, not per exchange
+            # Handle it separately
+            all_errors = self.validate_session_caching(analysis_result)
+            exchange_errors = {}
+            # Group errors by session (since session_caching validates across exchanges)
+            for error in all_errors:
+                # For session_caching, we'll use a special key or group by packet
+                session_key = f"session_caching_{error.get('packet_number', 'unknown')}"
+                if session_key not in exchange_errors:
+                    exchange_errors[session_key] = []
+                exchange_errors[session_key].append(error)
+            
+            if verbose and all_errors:
+                print(f"\n{'='*80}")
+                print(f"HKEP Session Caching Validation Results")
+                print(f"{'='*80}")
+                
+                error_count = sum(1 for e in all_errors if e['severity'] == 'error')
+                warning_count = sum(1 for e in all_errors if e['severity'] == 'warning')
+                
+                print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings)")
+                
+                for session_key, errors in exchange_errors.items():
+                    print(f"\n  Session: {session_key}")
+                    for error in errors:
+                        severity_marker = "[ERROR]" if error['severity'] == 'error' else "[WARNING]"
+                        print(f"    {severity_marker} {error['description']}")
+                        print(f"      Packet: #{error['packet_number']}, Timestamp: {error['timestamp']:.6f}")
+                        print(f"      Expected: {error['expected']}")
+                        print(f"      HKEP Section: {error['hkep_section']}")
+                        if error.get('note'):
+                            print(f"      Note: {error['note']}")
+                
+                print(f"\n{'='*80}")
+            elif verbose:
+                print(f"\n{'='*80}")
+                print(f"HKEP Session Caching Validation: PASSED")
+                print(f"  All session caching requirements are satisfied:")
+                print(f"    - Sender session caching consistency met")
+                print(f"    - Receiver session reuse patterns met")
+                print(f"{'='*80}")
+            
+            return {
+                'total_errors': sum(1 for e in all_errors if e['severity'] == 'error'),
+                'total_warnings': sum(1 for e in all_errors if e['severity'] == 'warning'),
+                'total_issues': len(all_errors),
+                'exchange_errors': exchange_errors,
+                'all_errors': all_errors
+            }
         else:
             return {
                 'total_errors': 0,
@@ -2450,6 +2519,9 @@ class HKEPDissector:
                         'hkep_section': '12.6.2'
                     })
             
+            # Check if we should ignore slot limits (assume infinite slots)
+            ignore_slot_limits = hasattr(self, '_ignore_slot_limits') and self._ignore_slot_limits
+            
             # 12.6: Validate sessionSlots - must be present and at least 1
             # Per spec: "Senders and Receivers may support a limited number of session slots. 
             # The attribute sessionSlots of the AKE_PreInitStatus message shall indicate the 
@@ -2466,7 +2538,7 @@ class HKEPDissector:
                     'expected': 'AKE_PreInitStatus shall include sessionSlots attribute indicating maximum number of session slots available (per section 12.6)',
                     'hkep_section': '12.6'
                 })
-            elif session_slots == 0:
+            elif session_slots == 0 and not ignore_slot_limits:
                 errors.append({
                     'type': 'invalid_session_slots_zero',
                     'severity': 'error',
@@ -2480,6 +2552,7 @@ class HKEPDissector:
             
             # 12.6.1: Validate pairingSlots when pairing=true
             pairing_slots = preinitstatus_msg.get('hkep', {}).get('pairingSlots')
+            
             if pairing_flag is True:
                 if pairing_slots is None:
                     errors.append({
@@ -2492,9 +2565,22 @@ class HKEPDissector:
                         'hkep_section': '12.6.1'
                     })
             
+            # 12.6: pairingSlots cannot be 0 as it prevents session caching
+            if pairing_slots is not None and pairing_slots == 0 and not ignore_slot_limits:
+                errors.append({
+                    'type': 'invalid_pairing_slots_zero',
+                    'severity': 'error',
+                    'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has pairingSlots=0, which prevents any HKEP session from being cached",
+                    'packet_number': preinitstatus_msg.get('packet_number'),
+                    'timestamp': preinitstatus_msg.get('timestamp', 0),
+                    'expected': 'pairingSlots must be at least 1 to allow HKEP sessions to be cached (per section 12.6)',
+                    'hkep_section': '12.6',
+                    'note': 'If pairingSlots is 0, no HKEP session can be cached, which goes against the requirement to cache an HKEP session'
+                })
+            
             # 12.6: If pairingSlots is 0, Sender must not send AKE_Stored_km messages
             # AKE_Stored_km messages come from using pairing information, which requires pairing slots
-            if pairing_slots is not None and pairing_slots == 0:
+            if pairing_slots is not None and pairing_slots == 0 and not ignore_slot_limits:
                 # Check if any AKE_Stored_km messages were sent
                 stored_km_messages = [msg for msg in sorted_messages 
                                      if msg.get('hkep', {}).get('message_type') == 'AKE_Stored_km']
@@ -2697,6 +2783,9 @@ class HKEPDissector:
                 pairing_slots = preinitstatus_msg.get('hkep', {}).get('pairingSlots')
                 session_slots = preinitstatus_msg.get('hkep', {}).get('sessionSlots')
                 
+                # Check if we should ignore slot limits (assume infinite slots)
+                ignore_slot_limits = hasattr(self, '_ignore_slot_limits') and self._ignore_slot_limits
+                
                 if pairing_slots is None:
                     errors.append({
                         'type': 'missing_pairing_slots',
@@ -2706,6 +2795,17 @@ class HKEPDissector:
                         'timestamp': preinitstatus_msg.get('timestamp', 0),
                         'expected': 'AKE_PreInitStatus with statusOk shall include pairingSlots attribute indicating maximum device capabilities (per section 12.7)',
                         'hkep_section': '12.7'
+                    })
+                elif pairing_slots == 0 and not ignore_slot_limits:
+                    errors.append({
+                        'type': 'invalid_pairing_slots_zero',
+                        'severity': 'error',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) with statusOk has pairingSlots=0, which prevents any HKEP session from being cached",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'pairingSlots must be at least 1 to allow HKEP sessions to be cached (per section 12.7)',
+                        'hkep_section': '12.7',
+                        'note': 'If pairingSlots is 0, no HKEP session can be cached, which goes against the requirement to cache an HKEP session'
                     })
                 
                 if session_slots is None:
@@ -2718,7 +2818,7 @@ class HKEPDissector:
                         'expected': 'AKE_PreInitStatus with statusOk shall include sessionSlots attribute indicating maximum device capabilities (per section 12.7)',
                         'hkep_section': '12.7'
                     })
-                elif session_slots == 0:
+                elif session_slots == 0 and not ignore_slot_limits:
                     errors.append({
                         'type': 'invalid_session_slots_zero',
                         'severity': 'error',
@@ -2980,6 +3080,232 @@ class HKEPDissector:
         
         return errors
     
+    def validate_session_caching(self, analysis_result: HKEPAnalysisResult) -> List[Dict]:
+        """
+        Validate session caching consistency across all exchanges
+        
+        Per HKEP requirements:
+        - Sender: Session becomes active after sending RepeaterAuth_Send_Ack
+        - If sender sends RepeaterAuth_Send_Ack, it must cache the session
+        - If receiver connects with REAUTH_REQ=false, sender should reuse cached session
+        - Receiver: Session becomes active after sending Receiver_AuthStatus or closing connection
+        - Receiver with REAUTH_REQ=false should be reusing a valid cached session
+        
+        Returns:
+            List of validation errors/warnings
+        """
+        errors = []
+        
+        # Group exchanges by session tuple to analyze session lifecycle
+        sessions = {}  # session_key -> list of exchanges (in chronological order)
+        
+        for exchange in analysis_result.get_all_exchanges():
+            session_key = exchange.session_key
+            if session_key not in sessions:
+                sessions[session_key] = []
+            sessions[session_key].append(exchange)
+        
+        # Sort exchanges within each session by start time
+        for session_key in sessions:
+            sessions[session_key].sort(key=lambda x: x.start_time if x.start_time else 0)
+        
+        # Analyze each session
+        for session_key, exchanges in sessions.items():
+            if len(exchanges) == 0:
+                continue
+            
+            # Track session state across exchanges
+            sender_session_active = False
+            receiver_session_active = False
+            sender_send_ack_packet = None
+            receiver_authstatus_packet = None
+            
+            # For each exchange, if it has multiple TCP connections, we need to split it into logical connection cycles
+            # A new AKE_PreInit after a previous connection ended indicates a new logical exchange (reconnect)
+            logical_exchanges = []
+            for exchange in exchanges:
+                if len(exchange.tcp_connections) > 1:
+                    # Multiple TCP connections - split by AKE_PreInit messages
+                    # Each AKE_PreInit starts a new logical exchange
+                    all_messages = exchange.get_messages()
+                    sorted_messages = sorted(all_messages, key=lambda x: x.get('timestamp', 0))
+                    
+                    # Find all AKE_PreInit messages
+                    preinit_indices = []
+                    for idx, msg in enumerate(sorted_messages):
+                        hkep_data = msg.get('hkep', {})
+                        if hkep_data.get('message_type') == 'AKE_PreInit':
+                            preinit_indices.append(idx)
+                    
+                    if len(preinit_indices) > 1:
+                        # Multiple AKE_PreInit messages - split into logical exchanges
+                        for i, preinit_idx in enumerate(preinit_indices):
+                            start_idx = preinit_idx
+                            end_idx = preinit_indices[i + 1] if i + 1 < len(preinit_indices) else len(sorted_messages)
+                            
+                            logical_messages = sorted_messages[start_idx:end_idx]
+                            
+                            # Create a temporary exchange-like object for this connection cycle
+                            # Use a class to properly capture the messages
+                            class LogicalExchange:
+                                def __init__(self, session_key, messages, tcp_connections, start_time, end_time):
+                                    self.session_key = session_key
+                                    self._messages = messages
+                                    self.tcp_connections = tcp_connections
+                                    self.start_time = start_time
+                                    self.end_time = end_time
+                                
+                                def get_messages(self):
+                                    return self._messages
+                            
+                            logical_exchange = LogicalExchange(
+                                exchange.session_key,
+                                logical_messages,
+                                exchange.tcp_connections,
+                                min((m.get('timestamp', 0) for m in logical_messages), default=0),
+                                max((m.get('timestamp', 0) for m in logical_messages), default=0)
+                            )
+                            logical_exchanges.append(logical_exchange)
+                    else:
+                        # Only one AKE_PreInit - use as is
+                        logical_exchanges.append(exchange)
+                else:
+                    # Single TCP connection - use as is
+                    logical_exchanges.append(exchange)
+            
+            # Sort logical exchanges by start time
+            logical_exchanges.sort(key=lambda x: x.start_time if hasattr(x, 'start_time') and x.start_time else 0)
+            
+            # Analyze logical exchanges in chronological order
+            for exchange_idx, exchange in enumerate(logical_exchanges):
+                messages = exchange.get_messages()
+                sorted_messages = sorted(messages, key=lambda x: x.get('timestamp', 0))
+                
+                # Check for AKE_PreInit with REAUTH_REQ flag
+                # Note: sender_session_active reflects the state from the PREVIOUS exchange
+                ake_preinit_msg = None
+                reauth_req = None
+                for msg in sorted_messages:
+                    hkep_data = msg.get('hkep', {})
+                    if hkep_data.get('message_type') == 'AKE_PreInit':
+                        ake_preinit_msg = msg
+                        reauth_req = hkep_data.get('restart/REAUTH_REQ', True)
+                        break
+                
+                # If this is a reconnect (REAUTH_REQ=false) and not the first exchange
+                # Use BOTH approaches:
+                # 1. If we saw RepeaterAuth_Send_Ack in previous exchange, we KNOW session was cached
+                # 2. If we didn't see it, check AKE_PreInitStatus response to determine if sender had cached session
+                if ake_preinit_msg and reauth_req is False and exchange_idx > 0:
+                    # This is a reconnect attempt
+                    # Find sender's AKE_PreInitStatus response
+                    preinitstatus_msg = None
+                    for msg in sorted_messages:
+                        hkep_data = msg.get('hkep', {})
+                        if hkep_data.get('message_type') == 'AKE_PreInitStatus':
+                            preinitstatus_msg = msg
+                            break
+                    
+                    if sender_session_active:
+                        # We KNOW session was cached (saw Send_Ack in previous exchange)
+                        # Validate that sender responds with statusOk to indicate valid cached session
+                        if preinitstatus_msg:
+                            status = preinitstatus_msg.get('hkep', {}).get('status')
+                            # Only statusOk (0) indicates sender has a valid cached session
+                            if status != 0:  # Not statusOk
+                                status_text = preinitstatus_msg.get('hkep', {}).get('status_text', 'Unknown')
+                                errors.append({
+                                    'type': 'reconnect_invalid_preinitstatus',
+                                    'severity': 'error',
+                                    'description': f"Receiver attempting reconnect (REAUTH_REQ=false) in exchange {exchange_idx + 1} (packet #{ake_preinit_msg.get('packet_number')}). Sender had cached session (Send_Ack seen in previous exchange at packet #{sender_send_ack_packet}), but AKE_PreInitStatus has status '{status_text}' (status={status}) instead of statusOk",
+                                    'packet_number': preinitstatus_msg.get('packet_number'),
+                                    'timestamp': preinitstatus_msg.get('timestamp', 0),
+                                    'expected': 'When reconnecting with REAUTH_REQ=false, sender with cached session should respond with AKE_PreInitStatus statusOk (per section 12.6.3)',
+                                    'hkep_section': 'session_caching',
+                                    'note': 'Only statusOk indicates the sender has a valid cached HKEP session. Other statuses (statusSessionExpired, statusPairingExpired, etc.) indicate the session is not valid or was not cached.'
+                                })
+                        else:
+                            # Missing PreInitStatus response when we know session was cached
+                            errors.append({
+                                'type': 'reconnect_missing_preinitstatus_with_cached_session',
+                                'severity': 'error',
+                                'description': f"Receiver attempting reconnect (REAUTH_REQ=false) in exchange {exchange_idx + 1} (packet #{ake_preinit_msg.get('packet_number')}). Sender had cached session (Send_Ack seen in previous exchange at packet #{sender_send_ack_packet}), but did not respond with AKE_PreInitStatus",
+                                'packet_number': ake_preinit_msg.get('packet_number'),
+                                'timestamp': ake_preinit_msg.get('timestamp', 0),
+                                'expected': 'Sender must respond with AKE_PreInitStatus after receiving AKE_PreInit (per section 12.6)',
+                                'hkep_section': 'session_caching'
+                            })
+                    else:
+                        # We DIDN'T see Send_Ack in previous exchange - check PreInitStatus to infer if sender had cached session
+                        if preinitstatus_msg:
+                            status = preinitstatus_msg.get('hkep', {}).get('status')
+                            status_text = preinitstatus_msg.get('hkep', {}).get('status_text', 'Unknown')
+                            
+                            # Only statusOk (0) indicates sender has a valid cached session
+                            # statusSessionExpired (3) could mean session expired OR never existed - cannot infer
+                            # statusPairingExpired (2) also does not indicate cached session
+                            if status == 0:  # statusOk
+                                # Sender has valid cached session - update state
+                                sender_session_active = True
+                            else:
+                                # statusInvalidParameters (1), statusPairingExpired (2), statusSessionExpired (3), or other
+                                # Cannot confirm sender had a cached session
+                                errors.append({
+                                    'type': 'reconnect_without_cached_session',
+                                    'severity': 'error',
+                                    'description': f"Receiver attempting reconnect (REAUTH_REQ=false) in exchange {exchange_idx + 1} (packet #{ake_preinit_msg.get('packet_number')}), but AKE_PreInitStatus has status '{status_text}' (status={status}), indicating sender does not have a valid cached session",
+                                    'packet_number': preinitstatus_msg.get('packet_number'),
+                                    'timestamp': preinitstatus_msg.get('timestamp', 0),
+                                    'expected': 'If receiver uses REAUTH_REQ=false, sender must have a valid cached session and should respond with AKE_PreInitStatus statusOk (per section 12.6.3)',
+                                    'hkep_section': 'session_caching',
+                                    'note': 'No Send_Ack seen in previous exchange, and AKE_PreInitStatus status is not statusOk. Only statusOk indicates a valid cached HKEP session.'
+                                })
+                        else:
+                            # No PreInitStatus response - cannot determine if session was cached
+                            errors.append({
+                                'type': 'reconnect_missing_preinitstatus',
+                                'severity': 'error',
+                                'description': f"Receiver attempting reconnect (REAUTH_REQ=false) in exchange {exchange_idx + 1} (packet #{ake_preinit_msg.get('packet_number')}), but sender did not respond with AKE_PreInitStatus",
+                                'packet_number': ake_preinit_msg.get('packet_number'),
+                                'timestamp': ake_preinit_msg.get('timestamp', 0),
+                                'expected': 'Sender must respond with AKE_PreInitStatus after receiving AKE_PreInit (per section 12.6)',
+                                'hkep_section': 'session_caching'
+                            })
+                
+                # If this is a full restart (REAUTH_REQ=true) but sender had active session
+                if ake_preinit_msg and reauth_req is True and sender_session_active and exchange_idx > 0:
+                    # Sender had active session but receiver is doing full restart
+                    # This might be intentional (session expired, etc.) but worth noting
+                    errors.append({
+                        'type': 'full_restart_with_active_session',
+                        'severity': 'warning',
+                        'description': f"Full restart (REAUTH_REQ=true) in exchange {exchange_idx + 1} (packet #{ake_preinit_msg.get('packet_number')}), but sender had active session from previous exchange",
+                        'packet_number': ake_preinit_msg.get('packet_number'),
+                        'timestamp': ake_preinit_msg.get('timestamp', 0),
+                        'expected': 'If sender has active cached session, receiver should use REAUTH_REQ=false to reconnect (per section 12.6.3)',
+                        'hkep_section': 'session_caching',
+                        'note': 'This may be intentional if session expired or was invalidated'
+                    })
+                
+                # Check for RepeaterAuth_Send_Ack in this exchange (sender caches session after sending this)
+                # This sets the state for the NEXT exchange
+                for msg in sorted_messages:
+                    hkep_data = msg.get('hkep', {})
+                    if hkep_data.get('message_type') == 'RepeaterAuth_Send_Ack':
+                        # Sender sent Send_Ack, so session should be cached for next exchange
+                        sender_session_active = True
+                        sender_send_ack_packet = msg.get('packet_number')
+                        break
+            
+            # Final validation: If sender sent RepeaterAuth_Send_Ack, it should cache the session
+            # This is validated by checking if subsequent reconnects work correctly
+            if sender_send_ack_packet and len(exchanges) == 1:
+                # Only one exchange, so we can't verify caching behavior
+                # But we can note that sender should cache this session
+                pass  # No error - single exchange is valid
+        
+        return errors
+    
     def print_hkep_message(self, result: Dict, violations: List[Dict] = None):
         """
         Pretty print a single HKEP message
@@ -3087,6 +3413,11 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
   - streamCtr immutability (Type and ContentStreamID must remain constant for session)
   - k attribute bounded to maximum (2 * ProtocolMaxContentStreams)
   - Number of unique streamCtr values <= ProtocolMaxContentStreams
+
+The --validate-session-caching option validates session caching consistency:
+  - Sender must cache session after sending RepeaterAuth_Send_Ack
+  - If receiver uses REAUTH_REQ=false, sender should have cached session from previous exchange
+  - Receiver reconnect patterns (warnings when receiver doesn't appear to reuse valid session)
         """
     )
     
@@ -3110,8 +3441,12 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                         help='Validate all HKEP section 13.2 requirements (initial messages, message sequences)')
     parser.add_argument('--validate-13-3', action='store_true',
                         help='Validate all HKEP section 13.3 requirements (RepeaterAuth_Stream_Manage: streamCtr immutability, k bounds)')
+    parser.add_argument('--validate-session-caching', action='store_true',
+                        help='Validate session caching consistency (sender must cache after RepeaterAuth_Send_Ack, receiver reconnect patterns)')
     parser.add_argument('--validate-all', action='store_true',
-                        help='Validate all HKEP sections (12.6, 12.7, 13.1, 13.2, and 13.3)')
+                        help='Validate all HKEP sections (12.6, 12.7, 13.1, 13.2, 13.3, and session caching)')
+    parser.add_argument('--ignore-slot-limits', action='store_true',
+                        help='Ignore pairingSlots and sessionSlots values from PreInitStatus and assume they are infinite (useful for initial testing when values may be missing or zero)')
     
     args = parser.parse_args()
     
@@ -3122,6 +3457,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
     validate_13_1 = args.validate_13_1 or args.validate_all
     validate_13_2 = args.validate_13_2 or args.validate_all
     validate_13_3 = args.validate_13_3 or args.validate_all
+    validate_session_caching = args.validate_session_caching or args.validate_all
     
     # Create dissector
     dissector = HKEPDissector(target_port=args.port)
@@ -3136,10 +3472,12 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
         validate_12_7=validate_12_7,
         validate_13_1=validate_13_1,
         validate_13_2=validate_13_2,
-        validate_13_3=validate_13_3
+        validate_13_3=validate_13_3,
+        validate_session_caching=validate_session_caching,
+        ignore_slot_limits=args.ignore_slot_limits
     )
     
-    # Validate sections if requested (in numerical order: 12.6, 12.7, 13.1, 13.2, 13.3)
+    # Validate sections if requested (in numerical order: 12.6, 12.7, 13.1, 13.2, 13.3, then session_caching)
     if validate_12_6:
         validation_results_12_6 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="12.6")
     if validate_12_7:
@@ -3150,6 +3488,8 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
         validation_results_13_2 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.2")
     if validate_13_3:
         validation_results_13_3 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.3")
+    if validate_session_caching:
+        validation_results_session_caching = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="session_caching")
     
     # Write to JSON if requested
     if args.output:
@@ -3196,7 +3536,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                 }
                 output_data['exchanges'].append(exchange_data)
 
-            # Add validation results if available (in numerical section order: 12.6, 12.7, 13.1, 13.2, 13.3)
+            # Add validation results if available (in numerical section order: 12.6, 12.7, 13.1, 13.2, 13.3, then session_caching)
             if validate_12_6 and 'validation_results_12_6' in locals():
                 output_data['section_12_6_validation'] = {
                     'total_errors': validation_results_12_6['total_errors'],
@@ -3314,6 +3654,30 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             for e in errors
                         ]
                         for session_key, errors in validation_results_13_3['exchange_errors'].items()
+                    }
+                }
+            
+            if validate_session_caching and 'validation_results_session_caching' in locals():
+                output_data['session_caching_validation'] = {
+                    'total_errors': validation_results_session_caching['total_errors'],
+                    'total_warnings': validation_results_session_caching['total_warnings'],
+                    'total_issues': validation_results_session_caching['total_issues'],
+                    'exchanges_with_errors': len(validation_results_session_caching['exchange_errors']),
+                    'errors_by_exchange': {
+                        session_key: [
+                            {
+                                'type': e['type'],
+                                'severity': e['severity'],
+                                'description': e['description'],
+                                'packet_number': e['packet_number'],
+                                'timestamp': e['timestamp'],
+                                'expected': e['expected'],
+                                'hkep_section': e['hkep_section'],
+                                'note': e.get('note')  # Include note if present
+                            }
+                            for e in errors
+                        ]
+                        for session_key, errors in validation_results_session_caching['exchange_errors'].items()
                     }
                 }
 
