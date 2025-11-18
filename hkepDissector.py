@@ -1041,7 +1041,7 @@ class HKEPDissector:
 
         return messages
 
-    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_12_6: bool = False, validate_12_7: bool = False, validate_13_1: bool = False, validate_13_2: bool = False) -> HKEPAnalysisResult:
+    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_12_6: bool = False, validate_12_7: bool = False, validate_13_1: bool = False, validate_13_2: bool = False, validate_13_3: bool = False) -> HKEPAnalysisResult:
         """
         Analyze PCAP file for HKEP messages
 
@@ -1093,6 +1093,7 @@ class HKEPDissector:
         self._validate_12_7 = validate_12_7
         self._validate_13_1 = validate_13_1
         self._validate_13_2 = validate_13_2
+        self._validate_13_3 = validate_13_3
         
         # Use proper TCP stream reassembly
         if handle_reassembly:
@@ -1576,7 +1577,7 @@ class HKEPDissector:
             analysis_result.add_exchange(exchange)
         
         # Build violation map: packet_number -> list of violations
-        # Process in numerical section order: 12.6, 12.7, 13.1, 13.2
+        # Process in numerical section order: 12.6, 12.7, 13.1, 13.2, 13.3
         violation_map = {}  # packet_number -> [violations]
         if hasattr(self, '_validate_12_6') and self._validate_12_6:
             for exchange in exchanges.values():
@@ -1611,6 +1612,16 @@ class HKEPDissector:
         if hasattr(self, '_validate_13_2') and self._validate_13_2:
             for exchange in exchanges.values():
                 errors = self.validate_section_13_2(exchange)
+                for error in errors:
+                    pkt_num = error.get('packet_number')
+                    if pkt_num:
+                        if pkt_num not in violation_map:
+                            violation_map[pkt_num] = []
+                        violation_map[pkt_num].append(error)
+        
+        if hasattr(self, '_validate_13_3') and self._validate_13_3:
+            for exchange in exchanges.values():
+                errors = self.validate_section_13_3(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
                     if pkt_num:
@@ -1655,7 +1666,7 @@ class HKEPDissector:
                     pkt_num = event['result'].get('packet_number')
                     violations = violation_map.get(pkt_num, [])
                     self.print_hkep_message(event['result'], violations)
-        
+
         if verbose:
             print(f"\n{'='*80}")
             print(f"Summary:")
@@ -1673,7 +1684,7 @@ class HKEPDissector:
         Args:
             analysis_result: Analysis result containing exchanges
             verbose: Print validation results
-            section: Section to validate ("12.6", "12.7", "13.1", or "13.2")
+            section: Section to validate ("12.6", "12.7", "13.1", "13.2", or "13.3")
         
         Returns:
             Dictionary with validation results
@@ -1695,6 +1706,9 @@ class HKEPDissector:
         elif section == "13.2":
             validate_func = self.validate_section_13_2
             section_name = "13.2"
+        elif section == "13.3":
+            validate_func = self.validate_section_13_3
+            section_name = "13.3"
         else:
             return {
                 'total_errors': 0,
@@ -1757,6 +1771,11 @@ class HKEPDissector:
                 print(f"  All section 13.2 requirements are satisfied:")
                 print(f"    - Initial message exchange requirements met")
                 print(f"    - Message sequence requirements met")
+            elif section == "13.3":
+                print(f"  All section 13.3 requirements are satisfied:")
+                print(f"    - streamCtr immutability requirements met")
+                print(f"    - k attribute bounds met")
+                print(f"    - Unique streamCtr count within limits")
             print(f"{'='*80}")
         
         return {
@@ -2668,6 +2687,132 @@ class HKEPDissector:
         
         return errors
     
+    def validate_section_13_3(self, exchange: HKEPExchange) -> List[Dict]:
+        """
+        Validate all requirements of HKEP section 13.3 (RepeaterAuth_Stream_Manage)
+        
+        Per VSF TR-10-5:2024 section 13.3:
+        - For each content stream, associate unique streamCtr to Type and ContentStreamID
+        - Type and ContentStreamID associated with streamCtr shall be immutable for session duration
+        - A given streamCtr shall be associated with given Type and ContentStreamID once for 
+          the lifetime of the Sender session key
+        - Attribute k shall be bounded to maximum value of (2 * ProtocolMaxContentStreams)
+        - There shall not be more than ProtocolMaxContentStreams different values of streamCtr 
+          in a given RepeaterAuth_Stream_Manage message
+        
+        Note: ProtocolMaxContentStreams is typically 32 per HDCP RTP v2.3 specification
+        
+        Returns:
+            List of validation errors (empty if sequence is valid)
+        """
+        errors = []
+        messages = exchange.get_messages()
+        
+        if not messages:
+            return errors
+        
+        sorted_messages = sorted(messages, key=lambda x: x.get('timestamp', 0))
+        
+        # ProtocolMaxContentStreams - per HDCP RTP v2.3, typically 32
+        # This can be overridden if needed, but 32 is the standard value
+        PROTOCOL_MAX_CONTENT_STREAMS = 32
+        
+        # Track streamCtr -> (Type, ContentStreamID) mappings across all RepeaterAuth_Stream_Manage messages
+        # Key: streamCtr (as hex string), Value: set of (Type, ContentStreamID) tuples
+        stream_ctr_mappings = {}  # streamCtr -> set((Type, ContentStreamID))
+        
+        # Process all RepeaterAuth_Stream_Manage messages in the exchange
+        stream_manage_messages = [msg for msg in sorted_messages 
+                                 if msg.get('hkep', {}).get('message_type') == 'RepeaterAuth_Stream_Manage']
+        
+        for stream_manage_msg in stream_manage_messages:
+            hkep_data = stream_manage_msg.get('hkep', {})
+            k_value = hkep_data.get('k')
+            streams = hkep_data.get('streams', [])
+            packet_num = stream_manage_msg.get('packet_number')
+            
+            # 13.3: Validate k is bounded to maximum (2 * ProtocolMaxContentStreams)
+            if k_value is not None:
+                max_k = 2 * PROTOCOL_MAX_CONTENT_STREAMS
+                if k_value > max_k:
+                    errors.append({
+                        'type': 'excessive_k_value',
+                        'severity': 'error',
+                        'description': f"RepeaterAuth_Stream_Manage (packet #{packet_num}) has k={k_value}, exceeding maximum allowed {max_k} (2 * ProtocolMaxContentStreams)",
+                        'packet_number': packet_num,
+                        'timestamp': stream_manage_msg.get('timestamp', 0),
+                        'expected': f'Attribute k of RepeaterAuth_Stream_Manage shall be bounded to maximum value of {max_k} (2 * ProtocolMaxContentStreams) (per section 13.3)',
+                        'hkep_section': '13.3'
+                    })
+            
+            # 13.3: Validate number of unique streamCtr values <= ProtocolMaxContentStreams
+            unique_stream_ctrs = set()
+            for stream in streams:
+                stream_ctr = stream.get('streamCtr')
+                if stream_ctr:
+                    unique_stream_ctrs.add(stream_ctr)
+            
+            if len(unique_stream_ctrs) > PROTOCOL_MAX_CONTENT_STREAMS:
+                errors.append({
+                    'type': 'excessive_unique_stream_ctrs',
+                    'severity': 'error',
+                    'description': f"RepeaterAuth_Stream_Manage (packet #{packet_num}) has {len(unique_stream_ctrs)} unique streamCtr values, exceeding maximum allowed {PROTOCOL_MAX_CONTENT_STREAMS}",
+                    'packet_number': packet_num,
+                    'timestamp': stream_manage_msg.get('timestamp', 0),
+                    'expected': f'There shall not be more than {PROTOCOL_MAX_CONTENT_STREAMS} different values of streamCtr in a given RepeaterAuth_Stream_Manage message (per section 13.3)',
+                    'hkep_section': '13.3'
+                })
+            
+            # 13.3: Track streamCtr -> (Type, ContentStreamID) associations
+            # Validate immutability: same streamCtr must have same Type and ContentStreamID
+            for stream in streams:
+                stream_ctr = stream.get('streamCtr')
+                stream_type = stream.get('Type')
+                content_stream_id = stream.get('ContentStreamID')
+                
+                if stream_ctr is None or stream_type is None or content_stream_id is None:
+                    continue
+                
+                # Create association tuple
+                association = (stream_type, content_stream_id)
+                
+                # Check if this streamCtr was seen before
+                if stream_ctr in stream_ctr_mappings:
+                    # Check if the association matches previous ones
+                    existing_associations = stream_ctr_mappings[stream_ctr]
+                    
+                    # 13.3: Type and ContentStreamID shall be immutable for session duration
+                    # Note: The spec allows a streamCtr to be associated with multiple ContentStreamID values
+                    # (when content stream is transmitted over multiple transport channels)
+                    # So we check if this is a NEW association that differs from existing ones
+                    if association not in existing_associations:
+                        # Check if this violates immutability: if streamCtr was previously associated with
+                        # a different Type, that's a violation (Type must be immutable)
+                        # If it's the same Type but different ContentStreamID, that's allowed (multiple transport channels)
+                        existing_types = {assoc[0] for assoc in existing_associations}
+                        if stream_type not in existing_types:
+                            # This is a violation: streamCtr is being reused with different Type
+                            errors.append({
+                                'type': 'immutable_stream_ctr_violation',
+                                'severity': 'error',
+                                'description': f"RepeaterAuth_Stream_Manage (packet #{packet_num}) has streamCtr={stream_ctr} with Type={stream_type}, ContentStreamID={content_stream_id}, but this streamCtr was previously associated with different Type values",
+                                'packet_number': packet_num,
+                                'timestamp': stream_manage_msg.get('timestamp', 0),
+                                'expected': 'Type and ContentStreamID values associated with a streamCtr value shall be immutable for the duration of a session. A given streamCtr value shall be associated with given Type and ContentStreamID values once for the lifetime of the Sender session key (per section 13.3)',
+                                'hkep_section': '13.3',
+                                'note': f'streamCtr {stream_ctr} was previously associated with Type values: {existing_types}'
+                            })
+                        else:
+                            # Same Type, different ContentStreamID - this is allowed (multiple transport channels)
+                            # Add this association to the set
+                            stream_ctr_mappings[stream_ctr].add(association)
+                    # If association already exists, it's valid (same streamCtr can appear multiple times with same Type/ContentStreamID)
+                else:
+                    # First time seeing this streamCtr, record the association
+                    stream_ctr_mappings[stream_ctr] = {association}
+        
+        return errors
+    
     def print_hkep_message(self, result: Dict, violations: List[Dict] = None):
         """
         Pretty print a single HKEP message
@@ -2770,6 +2915,11 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
   - TRANSMITTER_LOCALITY_PRECOMPUTE_SUPPORT must be true
   - RECEIVER_LOCALITY_PRECOMPUTE_SUPPORT must be true
   - LC_Init retry count within limits (max 1024 total trials)
+
+The --validate-13-3 option validates all HKEP section 13.3 requirements:
+  - streamCtr immutability (Type and ContentStreamID must remain constant for session)
+  - k attribute bounded to maximum (2 * ProtocolMaxContentStreams)
+  - Number of unique streamCtr values <= ProtocolMaxContentStreams
         """
     )
     
@@ -2791,8 +2941,10 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
                         help='Validate all HKEP section 13.1 requirements (locality check: precompute support flags, LC_Init retry limits)')
     parser.add_argument('--validate-13-2', action='store_true',
                         help='Validate all HKEP section 13.2 requirements (initial messages, message sequences)')
+    parser.add_argument('--validate-13-3', action='store_true',
+                        help='Validate all HKEP section 13.3 requirements (RepeaterAuth_Stream_Manage: streamCtr immutability, k bounds)')
     parser.add_argument('--validate-all', action='store_true',
-                        help='Validate all HKEP sections (12.6, 12.7, 13.1, and 13.2)')
+                        help='Validate all HKEP sections (12.6, 12.7, 13.1, 13.2, and 13.3)')
     
     args = parser.parse_args()
     
@@ -2802,6 +2954,7 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
     validate_12_7 = args.validate_12_7 or args.validate_all
     validate_13_1 = args.validate_13_1 or args.validate_all
     validate_13_2 = args.validate_13_2 or args.validate_all
+    validate_13_3 = args.validate_13_3 or args.validate_all
     
     # Create dissector
     dissector = HKEPDissector(target_port=args.port)
@@ -2815,10 +2968,11 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
         validate_12_6=validate_12_6,
         validate_12_7=validate_12_7,
         validate_13_1=validate_13_1,
-        validate_13_2=validate_13_2
+        validate_13_2=validate_13_2,
+        validate_13_3=validate_13_3
     )
     
-    # Validate sections if requested (in numerical order: 12.6, 12.7, 13.1, 13.2)
+    # Validate sections if requested (in numerical order: 12.6, 12.7, 13.1, 13.2, 13.3)
     if validate_12_6:
         validation_results_12_6 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="12.6")
     if validate_12_7:
@@ -2827,6 +2981,8 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
         validation_results_13_1 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.1")
     if validate_13_2:
         validation_results_13_2 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.2")
+    if validate_13_3:
+        validation_results_13_3 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.3")
     
     # Write to JSON if requested
     if args.output:
@@ -2859,7 +3015,7 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
                 }
                 output_data['exchanges'].append(exchange_data)
 
-            # Add validation results if available (in numerical section order: 12.6, 12.7, 13.1, 13.2)
+            # Add validation results if available (in numerical section order: 12.6, 12.7, 13.1, 13.2, 13.3)
             if validate_12_6 and 'validation_results_12_6' in locals():
                 output_data['section_12_6_validation'] = {
                     'total_errors': validation_results_12_6['total_errors'],
@@ -2956,6 +3112,30 @@ The --validate-13-1 option validates all HKEP section 13.1 requirements:
                     }
                 }
             
+            if validate_13_3 and 'validation_results_13_3' in locals():
+                output_data['section_13_3_validation'] = {
+                    'total_errors': validation_results_13_3['total_errors'],
+                    'total_warnings': validation_results_13_3['total_warnings'],
+                    'total_issues': validation_results_13_3['total_issues'],
+                    'exchanges_with_errors': len(validation_results_13_3['exchange_errors']),
+                    'errors_by_exchange': {
+                        stream_key: [
+                            {
+                                'type': e['type'],
+                                'severity': e['severity'],
+                                'description': e['description'],
+                                'packet_number': e['packet_number'],
+                                'timestamp': e['timestamp'],
+                                'expected': e['expected'],
+                                'hkep_section': e['hkep_section'],
+                                'note': e.get('note')  # Include note if present
+                            }
+                            for e in errors
+                        ]
+                        for stream_key, errors in validation_results_13_3['exchange_errors'].items()
+                    }
+                }
+
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
             print(f"\nResults written to {args.output}")
