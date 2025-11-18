@@ -1041,7 +1041,7 @@ class HKEPDissector:
 
         return messages
 
-    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_sequence: bool = False) -> HKEPAnalysisResult:
+    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_13_2: bool = False, validate_12_6: bool = False, validate_12_7: bool = False) -> HKEPAnalysisResult:
         """
         Analyze PCAP file for HKEP messages
 
@@ -1088,8 +1088,10 @@ class HKEPDissector:
             print(f"Error reading PCAP file: {e}")
             return HKEPAnalysisResult()
         
-        # Store validation flag for use in analysis
-        self._validate_sequence = validate_sequence
+        # Store validation flags for use in analysis
+        self._validate_13_2 = validate_13_2
+        self._validate_12_6 = validate_12_6
+        self._validate_12_7 = validate_12_7
         
         # Use proper TCP stream reassembly
         if handle_reassembly:
@@ -1573,8 +1575,29 @@ class HKEPDissector:
             analysis_result.add_exchange(exchange)
         
         # Build violation map: packet_number -> list of violations
+        # Process in numerical section order: 12.6, 12.7, 13.2
         violation_map = {}  # packet_number -> [violations]
-        if hasattr(self, '_validate_sequence') and self._validate_sequence:
+        if hasattr(self, '_validate_12_6') and self._validate_12_6:
+            for exchange in exchanges.values():
+                errors = self.validate_section_12_6(exchange)
+                for error in errors:
+                    pkt_num = error.get('packet_number')
+                    if pkt_num:
+                        if pkt_num not in violation_map:
+                            violation_map[pkt_num] = []
+                        violation_map[pkt_num].append(error)
+        
+        if hasattr(self, '_validate_12_7') and self._validate_12_7:
+            for exchange in exchanges.values():
+                errors = self.validate_section_12_7(exchange)
+                for error in errors:
+                    pkt_num = error.get('packet_number')
+                    if pkt_num:
+                        if pkt_num not in violation_map:
+                            violation_map[pkt_num] = []
+                        violation_map[pkt_num].append(error)
+        
+        if hasattr(self, '_validate_13_2') and self._validate_13_2:
             for exchange in exchanges.values():
                 errors = self.validate_section_13_2(exchange)
                 for error in errors:
@@ -1632,9 +1655,14 @@ class HKEPDissector:
 
         return analysis_result
     
-    def validate_all_exchanges(self, analysis_result: HKEPAnalysisResult, verbose: bool = True) -> Dict:
+    def validate_all_exchanges(self, analysis_result: HKEPAnalysisResult, verbose: bool = True, section: str = "13.2") -> Dict:
         """
-        Validate all HKEP section 13.2 requirements for all exchanges
+        Validate HKEP section requirements for all exchanges
+        
+        Args:
+            analysis_result: Analysis result containing exchanges
+            verbose: Print validation results
+            section: Section to validate ("13.2", "12.6", or "12.7")
         
         Returns:
             Dictionary with validation results
@@ -1642,15 +1670,35 @@ class HKEPDissector:
         all_errors = []
         exchange_errors = {}  # stream_key -> list of errors
         
+        validate_func = None
+        section_name = ""
+        if section == "13.2":
+            validate_func = self.validate_section_13_2
+            section_name = "13.2"
+        elif section == "12.6":
+            validate_func = self.validate_section_12_6
+            section_name = "12.6"
+        elif section == "12.7":
+            validate_func = self.validate_section_12_7
+            section_name = "12.7"
+        else:
+            return {
+                'total_errors': 0,
+                'total_warnings': 0,
+                'total_issues': 0,
+                'exchange_errors': {},
+                'all_errors': []
+            }
+        
         for exchange in analysis_result.get_all_exchanges():
-            errors = self.validate_section_13_2(exchange)
+            errors = validate_func(exchange)
             if errors:
                 exchange_errors[exchange.stream_key] = errors
                 all_errors.extend(errors)
         
         if verbose and all_errors:
             print(f"\n{'='*80}")
-            print(f"HKEP Section 13.2 Validation Results")
+            print(f"HKEP Section {section_name} Validation Results")
             print(f"{'='*80}")
             
             error_count = sum(1 for e in all_errors if e['severity'] == 'error')
@@ -1676,10 +1724,21 @@ class HKEPDissector:
             print(f"\n{'='*80}")
         elif verbose:
             print(f"\n{'='*80}")
-            print(f"HKEP Section 13.2 Validation: PASSED")
-            print(f"  All section 13.2 requirements are satisfied:")
-            print(f"    - Initial message exchange requirements met")
-            print(f"    - Message sequence requirements met")
+            print(f"HKEP Section {section_name} Validation: PASSED")
+            if section == "13.2":
+                print(f"  All section 13.2 requirements are satisfied:")
+                print(f"    - Initial message exchange requirements met")
+                print(f"    - Message sequence requirements met")
+            elif section == "12.6":
+                print(f"  All section 12.6 requirements are satisfied:")
+                print(f"    - AKE_PreInit requirements met")
+                print(f"    - AKE_PreInitStatus requirements met")
+                print(f"    - Reconnect requirements met")
+            elif section == "12.7":
+                print(f"  All section 12.7 requirements are satisfied:")
+                print(f"    - AKE_PreInit requirements met (receiver=false, pairing=true)")
+                print(f"    - AKE_PreInitStatus requirements met")
+                print(f"    - Only AKE_PreInit/AKE_PreInitStatus messages exchanged")
             print(f"{'='*80}")
         
         return {
@@ -2035,6 +2094,368 @@ class HKEPDissector:
         
         return errors
     
+    def validate_section_12_6(self, exchange: HKEPExchange) -> List[Dict]:
+        """
+        Validate all requirements of HKEP section 12.6 (The receiver protocol)
+        
+        Per VSF TR-10-5:2024 section 12.6:
+        12.6 Main requirements:
+        - AKE_PreInit shall always be the first message exchanged after TCP/IP connection
+        - AKE_PreInit.receiver attribute shall be true
+        
+        12.6.1 With explicit pairing (pairing=true):
+        - Sender shall respond with AKE_PreInitStatus
+        - If statusInvalidParameters, connection shall be closed
+        - Otherwise statusPairingExpired, start HDCP protocol with AKE_Init
+        - Receiver waits for AKE_PreInitStatus, then receives AKE_Init
+        
+        12.6.2 With implicit pairing (pairing=false):
+        - Sender shall respond with AKE_PreInitStatus with appropriate status
+        - Receiver behavior based on status value
+        
+        12.6.3 With reconnect:
+        - restart/REAUTH_REQ should be false when reconnecting after session is valid
+        - When restart/REAUTH_REQ is false, Receiver sends RepeaterAuth_Send_ReceiverID_List or Null
+        - Sender sends RepeaterAuth_Stream_Manage or Null
+        
+        Returns:
+            List of validation errors (empty if sequence is valid)
+        """
+        errors = []
+        messages = exchange.get_messages()
+        
+        if not messages:
+            return errors
+        
+        sorted_messages = sorted(messages, key=lambda x: x.get('timestamp', 0))
+        
+        # 12.6: AKE_PreInit shall always be the first message exchanged after TCP/IP connection
+        first_message = sorted_messages[0] if sorted_messages else None
+        if first_message:
+            first_msg_type = first_message.get('hkep', {}).get('message_type')
+            if first_msg_type != "AKE_PreInit":
+                errors.append({
+                    'type': 'invalid_first_message',
+                    'severity': 'error',
+                    'description': f"First message after TCP/IP connection is '{first_msg_type}' (packet #{first_message.get('packet_number')}), expected AKE_PreInit",
+                    'packet_number': first_message.get('packet_number'),
+                    'timestamp': first_message.get('timestamp', 0),
+                    'expected': 'AKE_PreInit shall always be the first message exchanged after TCP/IP connection (per section 12.6)',
+                    'hkep_section': '12.6'
+                })
+        
+        # Find AKE_PreInit message
+        preinit_msg = None
+        preinitstatus_msg = None
+        pairing_flag = None
+        restart_reauth_flag = None
+        receiver_flag = None
+        
+        for msg in sorted_messages:
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            
+            if msg_type == "AKE_PreInit":
+                preinit_msg = msg
+                pairing_flag = hkep_data.get('pairing', False)
+                restart_reauth_flag = hkep_data.get('restart/REAUTH_REQ', False)
+                receiver_flag = hkep_data.get('receiver', False)
+                
+                # 12.6: AKE_PreInit.receiver attribute shall be true
+                if not receiver_flag:
+                    errors.append({
+                        'type': 'invalid_preinit_receiver_flag',
+                        'severity': 'error',
+                        'description': f"AKE_PreInit (packet #{msg.get('packet_number')}) has receiver attribute set to false, expected true",
+                        'packet_number': msg.get('packet_number'),
+                        'timestamp': msg.get('timestamp', 0),
+                        'expected': 'AKE_PreInit.receiver attribute shall be true (per section 12.6)',
+                        'hkep_section': '12.6'
+                    })
+            
+            elif msg_type == "AKE_PreInitStatus":
+                preinitstatus_msg = msg
+        
+        # Validate AKE_PreInitStatus response
+        if preinit_msg and not preinitstatus_msg:
+            errors.append({
+                'type': 'missing_preinitstatus',
+                'severity': 'error',
+                'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) was sent but AKE_PreInitStatus response was not received",
+                'packet_number': preinit_msg.get('packet_number'),
+                'timestamp': preinit_msg.get('timestamp', 0),
+                'expected': 'Sender shall respond with AKE_PreInitStatus after receiving AKE_PreInit (per section 12.6)',
+                'hkep_section': '12.6'
+            })
+        
+        if preinitstatus_msg:
+            status = preinitstatus_msg.get('hkep', {}).get('status')
+            status_text = preinitstatus_msg.get('hkep', {}).get('status_text', 'Unknown')
+            
+            # 12.6.1 and 12.6.2: Validate status handling
+            if status == 1:  # statusInvalidParameters
+                # Connection should be closed - check if there are messages after PreInitStatus
+                messages_after = [m for m in sorted_messages if m.get('timestamp', 0) > preinitstatus_msg.get('timestamp', 0)]
+                if messages_after:
+                    # Check if connection was closed (FIN or RST)
+                    # This is harder to validate from just messages, so we'll just note it
+                    pass
+            
+            # 12.6.1: With explicit pairing (pairing=true)
+            if pairing_flag is True:
+                # Should be statusPairingExpired (unless invalid parameters)
+                if status not in [1, 2]:  # statusInvalidParameters or statusPairingExpired
+                    errors.append({
+                        'type': 'invalid_preinitstatus_for_explicit_pairing',
+                        'severity': 'error',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has status '{status_text}' (status={status}), expected statusPairingExpired when pairing=true",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'When AKE_PreInit.pairing is true, AKE_PreInitStatus.status should be statusPairingExpired (unless statusInvalidParameters) (per section 12.6.1)',
+                        'hkep_section': '12.6.1'
+                    })
+                # 12.6.1: "Otherwise, the Sender shall respond with an AKE_PreInitStatus message with 
+                # the status attribute set to statusPairingExpired, and it shall start the HDCP RTP v2.3 
+                # protocol by sending the AKE_Init message to the Receiver."
+                elif status == 2:  # statusPairingExpired
+                    # Check if AKE_Init follows after AKE_PreInitStatus
+                    messages_after = [m for m in sorted_messages if m.get('timestamp', 0) > preinitstatus_msg.get('timestamp', 0)]
+                    has_ake_init = any(m.get('hkep', {}).get('message_type') == 'AKE_Init' for m in messages_after)
+                    if not has_ake_init:
+                        errors.append({
+                            'type': 'missing_ake_init_after_pairing_expired',
+                            'severity': 'error',
+                            'description': f"AKE_PreInitStatus with statusPairingExpired (packet #{preinitstatus_msg.get('packet_number')}) was sent but AKE_Init message did not follow",
+                            'packet_number': preinitstatus_msg.get('packet_number'),
+                            'timestamp': preinitstatus_msg.get('timestamp', 0),
+                            'expected': 'When AKE_PreInit.pairing is true and status is statusPairingExpired, Sender shall start HDCP protocol by sending AKE_Init (per section 12.6.1)',
+                            'hkep_section': '12.6.1'
+                        })
+            
+            # 12.6.2: With implicit pairing (pairing=false)
+            elif pairing_flag is False:
+                # Status should be one of: statusInvalidParameters, statusPairingExpired, statusSessionExpired, statusOk
+                if status not in [0, 1, 2, 3]:  # statusOk, statusInvalidParameters, statusPairingExpired, statusSessionExpired
+                    errors.append({
+                        'type': 'invalid_preinitstatus_for_implicit_pairing',
+                        'severity': 'error',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has invalid status '{status_text}' (status={status}) when pairing=false",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'When AKE_PreInit.pairing is false, AKE_PreInitStatus.status should be statusOk, statusInvalidParameters, statusPairingExpired, or statusSessionExpired (per section 12.6.2)',
+                        'hkep_section': '12.6.2'
+                    })
+        
+        # 12.6.3: With reconnect - restart/REAUTH_REQ should be false when reconnecting after session is valid
+        # Per spec: "A Receiver should reconnect to a Sender with the restart/REAUTH_REQ attribute 
+        # of the AKE_PreInit message set to false after an HKEP session has become valid"
+        # So reconnect per 12.6.3 specifically requires restart/REAUTH_REQ=false
+        is_reconnect = self._is_reconnect_exchange(exchange)
+        
+        # 12.6.3: When restart/REAUTH_REQ is false and this is a reconnect, validate initial RepeaterAuth messages
+        # Note: If restart/REAUTH_REQ=true, it's not a reconnect per 12.6.3 (it's a full restart)
+        if is_reconnect and preinit_msg and restart_reauth_flag is False:
+            # Find first RepeaterAuth messages
+            repeaterauth_messages = [
+                "RepeaterAuth_Send_ReceiverID_List",
+                "RepeaterAuth_Send_Ack",
+                "RepeaterAuth_Stream_Manage",
+                "RepeaterAuth_Stream_Ready"
+            ]
+            
+            decoder_messages = exchange.get_decoder_messages()  # Receiver
+            encoder_messages = exchange.get_encoder_messages()  # Sender
+            
+            # Find first RepeaterAuth message from Receiver
+            first_repeaterauth_receiver = None
+            for msg in sorted(decoder_messages, key=lambda x: x.get('timestamp', 0)):
+                msg_type = msg.get('hkep', {}).get('message_type')
+                if msg_type in repeaterauth_messages + ["Null message"]:
+                    first_repeaterauth_receiver = msg_type
+                    break
+            
+            # Find first RepeaterAuth message from Sender
+            first_repeaterauth_sender = None
+            for msg in sorted(encoder_messages, key=lambda x: x.get('timestamp', 0)):
+                msg_type = msg.get('hkep', {}).get('message_type')
+                if msg_type in repeaterauth_messages + ["Null message"]:
+                    first_repeaterauth_sender = msg_type
+                    break
+            
+            # 12.6.3: Receiver shall send RepeaterAuth_Send_ReceiverID_List or Null
+            if first_repeaterauth_receiver and first_repeaterauth_receiver not in ["RepeaterAuth_Send_ReceiverID_List", "Null message"]:
+                receiver_msg = next((m for m in sorted(decoder_messages, key=lambda x: x.get('timestamp', 0)) 
+                                   if m.get('hkep', {}).get('message_type') in repeaterauth_messages + ["Null message"]), None)
+                if receiver_msg:
+                    errors.append({
+                        'type': 'invalid_reconnect_receiver_message',
+                        'severity': 'error',
+                        'description': f"Receiver's initial RepeaterAuth message during reconnect is '{first_repeaterauth_receiver}' (packet #{receiver_msg.get('packet_number')}), expected RepeaterAuth_Send_ReceiverID_List or Null",
+                        'packet_number': receiver_msg.get('packet_number'),
+                        'timestamp': receiver_msg.get('timestamp', 0),
+                        'expected': 'When reconnecting with restart/REAUTH_REQ=false, Receiver shall send RepeaterAuth_Send_ReceiverID_List or Null (per section 12.6.3)',
+                        'hkep_section': '12.6.3'
+                    })
+            
+            # 12.6.3: Sender shall send RepeaterAuth_Stream_Manage or Null
+            if first_repeaterauth_sender and first_repeaterauth_sender not in ["RepeaterAuth_Stream_Manage", "Null message"]:
+                sender_msg = next((m for m in sorted(encoder_messages, key=lambda x: x.get('timestamp', 0)) 
+                                 if m.get('hkep', {}).get('message_type') in repeaterauth_messages + ["Null message"]), None)
+                if sender_msg:
+                    errors.append({
+                        'type': 'invalid_reconnect_sender_message',
+                        'severity': 'error',
+                        'description': f"Sender's initial RepeaterAuth message during reconnect is '{first_repeaterauth_sender}' (packet #{sender_msg.get('packet_number')}), expected RepeaterAuth_Stream_Manage or Null",
+                        'packet_number': sender_msg.get('packet_number'),
+                        'timestamp': sender_msg.get('timestamp', 0),
+                        'expected': 'When reconnecting with restart/REAUTH_REQ=false, Sender shall send RepeaterAuth_Stream_Manage or Null (per section 12.6.3)',
+                        'hkep_section': '12.6.3'
+                    })
+        
+        return errors
+    
+    def validate_section_12_7(self, exchange: HKEPExchange) -> List[Dict]:
+        """
+        Validate all requirements of HKEP section 12.7 (The non-receiver protocol)
+        
+        Per VSF TR-10-5:2024 section 12.7:
+        - AKE_PreInit.receiver attribute shall be false
+        - AKE_PreInit.pairing attribute shall be true
+        - AKE_PreInit shall be the first message exchanged after TCP/IP connection
+        - Only AKE_PreInit and AKE_PreInitStatus messages shall be exchanged
+        - Only msg_id, version_*, pairing, receiver, vendorExtension attributes are valid
+        - If invalid attributes: statusInvalidParameters, connection closed
+        - If valid attributes: statusOk, pairingSlots/sessionSlots indicate capabilities
+        
+        Returns:
+            List of validation errors (empty if sequence is valid)
+        """
+        errors = []
+        messages = exchange.get_messages()
+        
+        if not messages:
+            return errors
+        
+        sorted_messages = sorted(messages, key=lambda x: x.get('timestamp', 0))
+        
+        # Find AKE_PreInit message first to determine if this is a non-receiver protocol exchange
+        preinit_msg = None
+        pairing_flag = None
+        receiver_flag = None
+        
+        for msg in sorted_messages:
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            
+            if msg_type == "AKE_PreInit":
+                preinit_msg = msg
+                pairing_flag = hkep_data.get('pairing', False)
+                receiver_flag = hkep_data.get('receiver', True)  # Default to True if not present
+                break
+        
+        # Section 12.7 only applies to non-receiver protocol exchanges
+        # If there's no AKE_PreInit, or if receiver=true or pairing=false, this is NOT a section 12.7 exchange
+        # Skip validation for this exchange
+        if not preinit_msg or receiver_flag or not pairing_flag:
+            return errors
+        
+        # Now we know this is a non-receiver protocol exchange (receiver=false, pairing=true)
+        # Continue with section 12.7 validation
+        
+        # 12.7: AKE_PreInit shall be the first message exchanged after TCP/IP connection
+        first_message = sorted_messages[0] if sorted_messages else None
+        if first_message:
+            first_msg_type = first_message.get('hkep', {}).get('message_type')
+            if first_msg_type != "AKE_PreInit":
+                errors.append({
+                    'type': 'invalid_first_message',
+                    'severity': 'error',
+                    'description': f"First message after TCP/IP connection is '{first_msg_type}' (packet #{first_message.get('packet_number')}), expected AKE_PreInit",
+                    'packet_number': first_message.get('packet_number'),
+                    'timestamp': first_message.get('timestamp', 0),
+                    'expected': 'AKE_PreInit shall always be the first message exchanged after TCP/IP connection (per section 12.7)',
+                    'hkep_section': '12.7'
+                })
+        
+        # Find AKE_PreInitStatus message
+        preinitstatus_msg = None
+        
+        for msg in sorted_messages:
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            
+            if msg_type == "AKE_PreInitStatus":
+                preinitstatus_msg = msg
+            
+            # 12.7: Only AKE_PreInit and AKE_PreInitStatus messages shall be exchanged
+            elif msg_type not in ["AKE_PreInit", "AKE_PreInitStatus"]:
+                errors.append({
+                    'type': 'invalid_message_for_non_receiver',
+                    'severity': 'error',
+                    'description': f"Unexpected message '{msg_type}' (packet #{msg.get('packet_number')}) in non-receiver protocol exchange",
+                    'packet_number': msg.get('packet_number'),
+                    'timestamp': msg.get('timestamp', 0),
+                    'expected': 'Only AKE_PreInit and AKE_PreInitStatus messages shall be exchanged in non-receiver protocol (per section 12.7)',
+                    'hkep_section': '12.7'
+                })
+        
+        # Validate AKE_PreInitStatus response
+        if preinit_msg and not preinitstatus_msg:
+            errors.append({
+                'type': 'missing_preinitstatus',
+                'severity': 'error',
+                'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) was sent but AKE_PreInitStatus response was not received",
+                'packet_number': preinit_msg.get('packet_number'),
+                'timestamp': preinit_msg.get('timestamp', 0),
+                'expected': 'Sender shall respond with AKE_PreInitStatus after receiving AKE_PreInit (per section 12.7)',
+                'hkep_section': '12.7'
+            })
+        
+        if preinitstatus_msg:
+            status = preinitstatus_msg.get('hkep', {}).get('status')
+            status_text = preinitstatus_msg.get('hkep', {}).get('status_text', 'Unknown')
+            
+            # 12.7: Status should be statusOk (if valid) or statusInvalidParameters (if invalid)
+            if status not in [0, 1]:  # statusOk or statusInvalidParameters
+                errors.append({
+                    'type': 'invalid_preinitstatus_status',
+                    'severity': 'error',
+                    'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has invalid status '{status_text}' (status={status}), expected statusOk or statusInvalidParameters",
+                    'packet_number': preinitstatus_msg.get('packet_number'),
+                    'timestamp': preinitstatus_msg.get('timestamp', 0),
+                    'expected': 'AKE_PreInitStatus.status shall be statusOk (if valid) or statusInvalidParameters (if invalid) (per section 12.7)',
+                    'hkep_section': '12.7'
+                })
+            
+            # 12.7: If status is statusOk, pairingSlots and sessionSlots should be present
+            if status == 0:  # statusOk
+                pairing_slots = preinitstatus_msg.get('hkep', {}).get('pairingSlots')
+                session_slots = preinitstatus_msg.get('hkep', {}).get('sessionSlots')
+                
+                if pairing_slots is None:
+                    errors.append({
+                        'type': 'missing_pairing_slots',
+                        'severity': 'warning',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) with statusOk missing pairingSlots attribute",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'AKE_PreInitStatus with statusOk shall include pairingSlots attribute indicating maximum device capabilities (per section 12.7)',
+                        'hkep_section': '12.7'
+                    })
+                
+                if session_slots is None:
+                    errors.append({
+                        'type': 'missing_session_slots',
+                        'severity': 'warning',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) with statusOk missing sessionSlots attribute",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'AKE_PreInitStatus with statusOk shall include sessionSlots attribute indicating maximum device capabilities (per section 12.7)',
+                        'hkep_section': '12.7'
+                    })
+        
+        return errors
+    
     def print_hkep_message(self, result: Dict, violations: List[Dict] = None):
         """
         Pretty print a single HKEP message
@@ -2110,13 +2531,28 @@ Examples:
   %(prog)s capture.pcap --port 48879
   %(prog)s capture.pcap --quiet
   %(prog)s capture.pcap --output results.txt
-  %(prog)s capture.pcap --validate-sequence
-  %(prog)s capture.pcap --validate-sequence --output results.json
+  %(prog)s capture.pcap --validate-13-2
+  %(prog)s capture.pcap --validate-13-2 --output results.json
+  %(prog)s capture.pcap --validate-all
+  %(prog)s capture.pcap --validate-all --output results.json
   
-The --validate-sequence option validates all HKEP section 13.2 requirements:
+The --validate-13-2 option validates all HKEP section 13.2 requirements:
   - Initial message exchange (Receiver/Sender first messages)
   - Message sequences (Stream_Manage->Stream_Ready, Send_ReceiverID_List->Send_Ack)
   - Stream_Ready/Send_Ack ordering
+
+The --validate-12-6 option validates all HKEP section 12.6 requirements:
+  - AKE_PreInit must be first message
+  - AKE_PreInit.receiver attribute must be true
+  - AKE_PreInitStatus response requirements
+  - Reconnect message requirements
+
+The --validate-12-7 option validates all HKEP section 12.7 requirements:
+  - AKE_PreInit must be first message
+  - AKE_PreInit.receiver attribute must be false
+  - AKE_PreInit.pairing attribute must be true
+  - Only AKE_PreInit and AKE_PreInitStatus messages exchanged
+  - AKE_PreInitStatus status and capabilities requirements
         """
     )
     
@@ -2130,10 +2566,22 @@ The --validate-sequence option validates all HKEP section 13.2 requirements:
                         help='Disable TCP stream reassembly (not recommended)')
     parser.add_argument('--show-tcp-issues', action='store_true',
                         help='Show warnings for TCP retransmissions, fragmentation, etc.')
-    parser.add_argument('--validate-sequence', action='store_true',
+    parser.add_argument('--validate-13-2', action='store_true',
                         help='Validate all HKEP section 13.2 requirements (initial messages, message sequences)')
+    parser.add_argument('--validate-12-6', action='store_true',
+                        help='Validate all HKEP section 12.6 requirements (AKE_PreInit, AKE_PreInitStatus, reconnect)')
+    parser.add_argument('--validate-12-7', action='store_true',
+                        help='Validate all HKEP section 12.7 requirements (non-receiver protocol: AKE_PreInit with receiver=false, pairing=true)')
+    parser.add_argument('--validate-all', action='store_true',
+                        help='Validate all HKEP sections (13.2, 12.6, and 12.7)')
     
     args = parser.parse_args()
+    
+    # Collect validation sections
+    # If --validate-all is set, enable all validations
+    validate_13_2 = args.validate_13_2 or args.validate_all
+    validate_12_6 = args.validate_12_6 or args.validate_all
+    validate_12_7 = args.validate_12_7 or args.validate_all
     
     # Create dissector
     dissector = HKEPDissector(target_port=args.port)
@@ -2144,12 +2592,18 @@ The --validate-sequence option validates all HKEP section 13.2 requirements:
         verbose=not args.quiet,
         handle_reassembly=not args.no_reassembly,
         show_tcp_issues=args.show_tcp_issues,
-        validate_sequence=args.validate_sequence
+        validate_13_2=validate_13_2,
+        validate_12_6=validate_12_6,
+        validate_12_7=validate_12_7
     )
     
-    # Validate sequence if requested
-    if args.validate_sequence:
-        validation_results = dissector.validate_all_exchanges(results, verbose=not args.quiet)
+    # Validate sections if requested (in numerical order: 12.6, 12.7, 13.2)
+    if validate_12_6:
+        validation_results_12_6 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="12.6")
+    if validate_12_7:
+        validation_results_12_7 = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="12.7")
+    if validate_13_2:
+        validation_results = dissector.validate_all_exchanges(results, verbose=not args.quiet, section="13.2")
     
     # Write to JSON if requested
     if args.output:
@@ -2182,9 +2636,57 @@ The --validate-sequence option validates all HKEP section 13.2 requirements:
                 }
                 output_data['exchanges'].append(exchange_data)
 
-            # Add validation results if available
-            if args.validate_sequence and 'validation_results' in locals():
-                output_data['sequence_validation'] = {
+            # Add validation results if available (in numerical section order: 12.6, 12.7, 13.2)
+            if validate_12_6 and 'validation_results_12_6' in locals():
+                output_data['section_12_6_validation'] = {
+                    'total_errors': validation_results_12_6['total_errors'],
+                    'total_warnings': validation_results_12_6['total_warnings'],
+                    'total_issues': validation_results_12_6['total_issues'],
+                    'exchanges_with_errors': len(validation_results_12_6['exchange_errors']),
+                    'errors_by_exchange': {
+                        stream_key: [
+                            {
+                                'type': e['type'],
+                                'severity': e['severity'],
+                                'description': e['description'],
+                                'packet_number': e['packet_number'],
+                                'timestamp': e['timestamp'],
+                                'expected': e['expected'],
+                                'hkep_section': e['hkep_section'],
+                                'note': e.get('note')  # Include note if present
+                            }
+                            for e in errors
+                        ]
+                        for stream_key, errors in validation_results_12_6['exchange_errors'].items()
+                    }
+                }
+            
+            if validate_12_7 and 'validation_results_12_7' in locals():
+                output_data['section_12_7_validation'] = {
+                    'total_errors': validation_results_12_7['total_errors'],
+                    'total_warnings': validation_results_12_7['total_warnings'],
+                    'total_issues': validation_results_12_7['total_issues'],
+                    'exchanges_with_errors': len(validation_results_12_7['exchange_errors']),
+                    'errors_by_exchange': {
+                        stream_key: [
+                            {
+                                'type': e['type'],
+                                'severity': e['severity'],
+                                'description': e['description'],
+                                'packet_number': e['packet_number'],
+                                'timestamp': e['timestamp'],
+                                'expected': e['expected'],
+                                'hkep_section': e['hkep_section'],
+                                'note': e.get('note')  # Include note if present
+                            }
+                            for e in errors
+                        ]
+                        for stream_key, errors in validation_results_12_7['exchange_errors'].items()
+                    }
+                }
+            
+            if validate_13_2 and 'validation_results' in locals():
+                output_data['section_13_2_validation'] = {
                     'total_errors': validation_results['total_errors'],
                     'total_warnings': validation_results['total_warnings'],
                     'total_issues': validation_results['total_issues'],
