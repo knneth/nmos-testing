@@ -1041,7 +1041,7 @@ class HKEPDissector:
 
         return messages
 
-    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False) -> HKEPAnalysisResult:
+    def analyze_pcap(self, pcap_file: str, verbose: bool = True, handle_reassembly: bool = True, show_tcp_issues: bool = False, validate_sequence: bool = False) -> HKEPAnalysisResult:
         """
         Analyze PCAP file for HKEP messages
 
@@ -1087,6 +1087,9 @@ class HKEPDissector:
         except Exception as e:
             print(f"Error reading PCAP file: {e}")
             return HKEPAnalysisResult()
+        
+        # Store validation flag for use in analysis
+        self._validate_sequence = validate_sequence
         
         # Use proper TCP stream reassembly
         if handle_reassembly:
@@ -1565,6 +1568,22 @@ class HKEPDissector:
                             })
 
         
+        # Add all exchanges to the analysis result
+        for exchange in exchanges.values():
+            analysis_result.add_exchange(exchange)
+        
+        # Build violation map: packet_number -> list of violations
+        violation_map = {}  # packet_number -> [violations]
+        if hasattr(self, '_validate_sequence') and self._validate_sequence:
+            for exchange in exchanges.values():
+                errors = self.validate_section_13_2(exchange)
+                for error in errors:
+                    pkt_num = error.get('packet_number')
+                    if pkt_num:
+                        if pkt_num not in violation_map:
+                            violation_map[pkt_num] = []
+                        violation_map[pkt_num].append(error)
+        
         # Sort timeline events by packet number (chronological order)
         timeline_events.sort(key=lambda x: (x['pkt_num'], x.get('timestamp', 0)))
         
@@ -1598,12 +1617,11 @@ class HKEPDissector:
                     print(f"{'='*80}")
                     print(f"\n{'#'*80} << END OF HKEP EXCHANGE (ABORTED)\n")
                 elif event['type'] == 'hkep_message':
-                    self.print_hkep_message(event['result'])
+                    # Get violations for this packet if any
+                    pkt_num = event['result'].get('packet_number')
+                    violations = violation_map.get(pkt_num, [])
+                    self.print_hkep_message(event['result'], violations)
         
-        # Add all exchanges to the analysis result
-        for exchange in exchanges.values():
-            analysis_result.add_exchange(exchange)
-
         if verbose:
             print(f"\n{'='*80}")
             print(f"Summary:")
@@ -1614,10 +1632,432 @@ class HKEPDissector:
 
         return analysis_result
     
-    def print_hkep_message(self, result: Dict):
-        """Pretty print a single HKEP message"""
+    def validate_all_exchanges(self, analysis_result: HKEPAnalysisResult, verbose: bool = True) -> Dict:
+        """
+        Validate all HKEP section 13.2 requirements for all exchanges
+        
+        Returns:
+            Dictionary with validation results
+        """
+        all_errors = []
+        exchange_errors = {}  # stream_key -> list of errors
+        
+        for exchange in analysis_result.get_all_exchanges():
+            errors = self.validate_section_13_2(exchange)
+            if errors:
+                exchange_errors[exchange.stream_key] = errors
+                all_errors.extend(errors)
+        
+        if verbose and all_errors:
+            print(f"\n{'='*80}")
+            print(f"HKEP Section 13.2 Validation Results")
+            print(f"{'='*80}")
+            
+            error_count = sum(1 for e in all_errors if e['severity'] == 'error')
+            warning_count = sum(1 for e in all_errors if e['severity'] == 'warning')
+            
+            print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings)")
+            
+            for stream_key, errors in exchange_errors.items():
+                exchange = analysis_result.get_exchange_by_stream_key(stream_key)
+                is_reconnect = exchange and self._is_reconnect_exchange(exchange) if exchange else False
+                reconnect_note = " (RECONNECT)" if is_reconnect else ""
+                
+                print(f"\n  Exchange: {stream_key}{reconnect_note}")
+                for error in errors:
+                    severity_marker = "[ERROR]" if error['severity'] == 'error' else "[WARNING]"
+                    print(f"    {severity_marker} {error['description']}")
+                    print(f"      Packet: #{error['packet_number']}, Timestamp: {error['timestamp']:.6f}")
+                    print(f"      Expected: {error['expected']}")
+                    print(f"      HKEP Section: {error['hkep_section']}")
+                    if error.get('note'):
+                        print(f"      Note: {error['note']}")
+            
+            print(f"\n{'='*80}")
+        elif verbose:
+            print(f"\n{'='*80}")
+            print(f"HKEP Section 13.2 Validation: PASSED")
+            print(f"  All section 13.2 requirements are satisfied:")
+            print(f"    - Initial message exchange requirements met")
+            print(f"    - Message sequence requirements met")
+            print(f"{'='*80}")
+        
+        return {
+            'total_errors': sum(1 for e in all_errors if e['severity'] == 'error'),
+            'total_warnings': sum(1 for e in all_errors if e['severity'] == 'warning'),
+            'total_issues': len(all_errors),
+            'exchange_errors': exchange_errors,
+            'all_errors': all_errors
+        }
+    
+    def _is_reconnect_exchange(self, exchange: HKEPExchange) -> bool:
+        """
+        Determine if this exchange is a reconnect scenario
+        
+        A reconnect is indicated by:
+        - Presence of AKE_PreInit or AKE_PreInitStatus messages with restart/REAUTH_REQ=false
+        - Or absence of AKE_Init at the start but presence of Stream_Ready/Send_Ack
+        
+        Note: If AKE_Init is present, this is NOT a reconnect - it's a full authentication.
+        """
+        messages = exchange.get_messages()
+        if not messages:
+            return False
+        
+        # Check for AKE_Init - if present, this is NOT a reconnect
+        has_ake_init = False
+        has_preinit_with_restart_false = False
+        first_message_type = None
+        
+        for msg in messages:
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            
+            if first_message_type is None:
+                first_message_type = msg_type
+            
+            if msg_type == "AKE_Init":
+                has_ake_init = True
+                # If AKE_Init is present, this is a full auth, not a reconnect
+                return False
+            
+            if msg_type == "AKE_PreInit":
+                restart_reauth = hkep_data.get('restart/REAUTH_REQ', False)
+                # If restart/REAUTH_REQ is false, it's a reconnect
+                if not restart_reauth:
+                    has_preinit_with_restart_false = True
+        
+        # If PreInit with restart=false is present, it's a reconnect
+        if has_preinit_with_restart_false:
+            return True
+        
+        # If exchange doesn't start with AKE_Init but has Stream_Ready/Send_Ack, likely a reconnect
+        if first_message_type not in [None, "AKE_Init"]:
+            stream_ready_count = len(exchange.get_messages_by_type("RepeaterAuth_Stream_Ready"))
+            send_ack_count = len(exchange.get_messages_by_type("RepeaterAuth_Send_Ack"))
+            if (stream_ready_count > 0 or send_ack_count > 0) and not has_ake_init:
+                return True
+        
+        return False
+    
+    def validate_section_13_2(self, exchange: HKEPExchange) -> List[Dict]:
+        """
+        Validate all requirements of HKEP section 13.2 (Exchange sequence - section 13.2.1)
+        
+        Per VSF TR-10-5:2024 section 13.2.1:
+        1. Initial Message Exchange (in RepeaterAuth phase):
+           - Receiver shall initially send RepeaterAuth_Send_ReceiverID_List or Null
+           - Sender shall initially send RepeaterAuth_Stream_Manage or Null
+        
+        2. Message Sequence Requirements:
+           - If Receiver receives RepeaterAuth_Stream_Manage, it shall send RepeaterAuth_Stream_Ready
+           - If Receiver sends RepeaterAuth_Send_ReceiverID_List, it shall receive RepeaterAuth_Send_Ack
+           - If Sender sends RepeaterAuth_Stream_Manage, it shall receive RepeaterAuth_Stream_Ready
+           - If Sender receives RepeaterAuth_Send_ReceiverID_List, it shall send RepeaterAuth_Send_Ack
+           - RepeaterAuth_Stream_Ready must be sent before RepeaterAuth_Send_Ack
+              (per note: "When receiving the RepeaterAuth_Send_Ack message a Receiver knows
+              for sure that the HKEP session on the Sender became valid because the Sender
+              does not return this message before it successfully receives a
+              RepeaterAuth_Stream_Ready message from the Receiver.")
+        
+        Note: This validation only applies to the RepeaterAuth phase messages.
+        AKE/LC/SKE/RTT phase messages are not validated here.
+        
+        Returns:
+            List of validation errors (empty if sequence is valid)
+        """
+        errors = []
+        messages = exchange.get_messages()
+        
+        if not messages:
+            return errors
+        
+        # Check if this is a reconnect exchange
+        is_reconnect = self._is_reconnect_exchange(exchange)
+        
+        # Get first messages from each direction to check initial message requirements
+        decoder_messages = exchange.get_decoder_messages()  # Decoder->Encoder (Receiver)
+        encoder_messages = exchange.get_encoder_messages()  # Encoder->Decoder (Sender)
+        
+        # 1. Validate Initial Message Exchange
+        # Section 13.2 is specifically about the RepeaterAuth phase, which comes AFTER:
+        # - AKE phase (AKE_PreInit, AKE_PreInitStatus, AKE_Init, AKE_Send_Cert, etc.)
+        # - LC phase (LC_Init, LC_Send_L_prime)
+        # - SKE phase (SKE_Send_Eks)
+        # - RTT phase (RTT_Ready, RTT_Challenge)
+        # We must only validate the first RepeaterAuth message, not any AKE/LC/SKE/RTT messages
+        
+        # RepeaterAuth message types (section 13.2 scope)
+        repeaterauth_messages = [
+            "RepeaterAuth_Send_ReceiverID_List",
+            "RepeaterAuth_Send_Ack",
+            "RepeaterAuth_Stream_Manage",
+            "RepeaterAuth_Stream_Ready"
+        ]
+        
+        if decoder_messages:
+            sorted_decoder_msgs = sorted(decoder_messages, key=lambda x: x.get('timestamp', 0))
+            
+            # Find first RepeaterAuth message (skip all AKE/LC/SKE/RTT messages)
+            first_repeaterauth_decoder_msg = None
+            for msg in sorted_decoder_msgs:
+                msg_type = msg.get('hkep', {}).get('message_type')
+                if msg_type in repeaterauth_messages:
+                    first_repeaterauth_decoder_msg = msg
+                    break
+            
+            # Only validate if there's a RepeaterAuth message
+            if first_repeaterauth_decoder_msg:
+                first_decoder_type = first_repeaterauth_decoder_msg.get('hkep', {}).get('message_type')
+                
+                # Receiver's initial RepeaterAuth message should be RepeaterAuth_Send_ReceiverID_List or Null
+                if first_decoder_type not in ["RepeaterAuth_Send_ReceiverID_List", "Null message"]:
+                    # Allow other messages if this is a reconnect
+                    if not is_reconnect:
+                        errors.append({
+                            'type': 'invalid_initial_receiver_message',
+                            'severity': 'error',
+                            'description': f"Receiver's initial RepeaterAuth message is '{first_decoder_type}' (packet #{first_repeaterauth_decoder_msg.get('packet_number')}), expected RepeaterAuth_Send_ReceiverID_List or Null",
+                            'packet_number': first_repeaterauth_decoder_msg.get('packet_number'),
+                            'timestamp': first_repeaterauth_decoder_msg.get('timestamp', 0),
+                            'expected': 'Receiver must send RepeaterAuth_Send_ReceiverID_List or Null message first in RepeaterAuth phase',
+                            'hkep_section': '13.2'
+                        })
+        
+        if encoder_messages:
+            sorted_encoder_msgs = sorted(encoder_messages, key=lambda x: x.get('timestamp', 0))
+            
+            # Find first RepeaterAuth message (skip all AKE/LC/SKE/RTT messages)
+            first_repeaterauth_encoder_msg = None
+            for msg in sorted_encoder_msgs:
+                msg_type = msg.get('hkep', {}).get('message_type')
+                if msg_type in repeaterauth_messages:
+                    first_repeaterauth_encoder_msg = msg
+                    break
+            
+            # Only validate if there's a RepeaterAuth message
+            if first_repeaterauth_encoder_msg:
+                first_encoder_type = first_repeaterauth_encoder_msg.get('hkep', {}).get('message_type')
+                
+                # Sender's initial RepeaterAuth message should be RepeaterAuth_Stream_Manage or Null
+                if first_encoder_type not in ["RepeaterAuth_Stream_Manage", "Null message"]:
+                    # Allow other messages if this is a reconnect
+                    if not is_reconnect:
+                        errors.append({
+                            'type': 'invalid_initial_sender_message',
+                            'severity': 'error',
+                            'description': f"Sender's initial RepeaterAuth message is '{first_encoder_type}' (packet #{first_repeaterauth_encoder_msg.get('packet_number')}), expected RepeaterAuth_Stream_Manage or Null",
+                            'packet_number': first_repeaterauth_encoder_msg.get('packet_number'),
+                            'timestamp': first_repeaterauth_encoder_msg.get('timestamp', 0),
+                            'expected': 'Sender must send RepeaterAuth_Stream_Manage or Null message first in RepeaterAuth phase',
+                            'hkep_section': '13.2'
+                        })
+        
+        # 2. Validate Message Sequence Requirements per section 13.2.1
+        # Per spec:
+        # - Receiver shall send RepeaterAuth_Stream_Ready if it initially received RepeaterAuth_Stream_Manage
+        # - Receiver shall attempt to receive RepeaterAuth_Send_Ack if it initially sent RepeaterAuth_Send_ReceiverID_List
+        # - Sender shall attempt to receive RepeaterAuth_Stream_Ready if it sent initial RepeaterAuth_Stream_Manage
+        # - Sender shall send RepeaterAuth_Send_Ack if it initially received RepeaterAuth_Send_ReceiverID_List
+        # - RepeaterAuth_Stream_Ready must be sent before RepeaterAuth_Send_Ack
+        #   (Sender does not return Send_Ack before it successfully receives Stream_Ready)
+        
+        # Track initial messages sent/received
+        receiver_initial_sent = None  # What Receiver initially sent
+        sender_initial_sent = None   # What Sender initially sent
+        receiver_initial_received = None  # What Receiver initially received
+        sender_initial_received = None    # What Sender initially received
+        
+        # Find initial RepeaterAuth messages
+        for msg in sorted(messages, key=lambda x: x.get('timestamp', 0)):
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            direction = hkep_data.get('direction', '')
+            
+            if msg_type not in repeaterauth_messages + ["Null message"]:
+                continue
+            
+            if direction == "Decoder->Encoder":  # Receiver
+                if receiver_initial_sent is None:
+                    receiver_initial_sent = msg_type
+            elif direction == "Encoder->Decoder":  # Sender
+                if sender_initial_sent is None:
+                    sender_initial_sent = msg_type
+        
+        # Find what each party initially received (first message from peer)
+        for msg in sorted(messages, key=lambda x: x.get('timestamp', 0)):
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            direction = hkep_data.get('direction', '')
+            
+            if msg_type not in repeaterauth_messages + ["Null message"]:
+                continue
+            
+            if direction == "Encoder->Decoder":  # Message TO Receiver (FROM Sender)
+                if receiver_initial_received is None:
+                    receiver_initial_received = msg_type
+            elif direction == "Decoder->Encoder":  # Message TO Sender (FROM Receiver)
+                if sender_initial_received is None:
+                    sender_initial_received = msg_type
+        
+        # Track sequence state
+        pending_stream_ready = []  # List of (packet_num, timestamp) for Stream_Ready messages waiting for Send_Ack
+        last_send_ack_packet = None
+        last_send_ack_timestamp = None
+        
+        # Track responses
+        stream_manage_received_by_receiver = False
+        stream_ready_sent_after_stream_manage = False
+        stream_manage_packet = None
+        
+        receiverid_list_sent_by_receiver = False
+        receiverid_list_received_by_sender = False
+        send_ack_sent_after_receiverid_list = False
+        receiverid_list_packet = None
+        
+        for msg in sorted(messages, key=lambda x: x.get('timestamp', 0)):
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+            packet_num = msg.get('packet_number')
+            timestamp = msg.get('timestamp', 0)
+            direction = hkep_data.get('direction', '')
+            
+            if msg_type == "RepeaterAuth_Stream_Manage":
+                if direction == "Encoder->Decoder":  # To Receiver
+                    stream_manage_received_by_receiver = True
+                    stream_manage_packet = packet_num
+                    stream_ready_sent_after_stream_manage = False
+            
+            elif msg_type == "RepeaterAuth_Stream_Ready":
+                if direction == "Decoder->Encoder":  # From Receiver
+                    if stream_manage_received_by_receiver:
+                        stream_ready_sent_after_stream_manage = True
+                    
+                    # Track for Stream_Ready -> Send_Ack sequence validation
+                    pending_stream_ready.append((packet_num, timestamp))
+                    
+                    # Validate: Stream_Ready must come before Send_Ack
+                    if last_send_ack_timestamp is not None and timestamp < last_send_ack_timestamp:
+                        errors.append({
+                            'type': 'invalid_sequence',
+                            'severity': 'error',
+                            'description': f"RepeaterAuth_Stream_Ready (packet #{packet_num}) received after RepeaterAuth_Send_Ack (packet #{last_send_ack_packet}). Sender must not return Send_Ack before receiving Stream_Ready.",
+                            'packet_number': packet_num,
+                            'timestamp': timestamp,
+                            'expected': 'RepeaterAuth_Stream_Ready must be sent before RepeaterAuth_Send_Ack (per section 13.2.1 note)',
+                            'hkep_section': '13.2.1'
+                        })
+            
+            elif msg_type == "RepeaterAuth_Send_ReceiverID_List":
+                if direction == "Decoder->Encoder":  # From Receiver TO Sender
+                    receiverid_list_sent_by_receiver = True
+                    receiverid_list_received_by_sender = True
+                    receiverid_list_packet = packet_num
+                    send_ack_sent_after_receiverid_list = False
+            
+            elif msg_type == "RepeaterAuth_Send_Ack":
+                if direction == "Encoder->Decoder":  # From Sender
+                    if receiverid_list_received_by_sender:
+                        send_ack_sent_after_receiverid_list = True
+                    
+                    last_send_ack_packet = packet_num
+                    last_send_ack_timestamp = timestamp
+                    
+                    # Validate: Send_Ack must come after Stream_Ready
+                    # Per spec: "Sender does not return this message before it successfully receives a RepeaterAuth_Stream_Ready message"
+                    if not pending_stream_ready:
+                        # No Stream_Ready seen before this Send_Ack
+                        # This is only acceptable in reconnect scenarios where Stream_Ready was in previous exchange
+                        if not is_reconnect:
+                            errors.append({
+                                'type': 'invalid_sequence',
+                                'severity': 'error',
+                                'description': f"RepeaterAuth_Send_Ack (packet #{packet_num}) received without preceding RepeaterAuth_Stream_Ready. Sender must not return Send_Ack before receiving Stream_Ready.",
+                                'packet_number': packet_num,
+                                'timestamp': timestamp,
+                                'expected': 'RepeaterAuth_Send_Ack must be preceded by RepeaterAuth_Stream_Ready (per section 13.2.1 note)',
+                                'hkep_section': '13.2.1',
+                                'note': 'This may be valid if this is a reconnect and Stream_Ready was sent in a previous exchange'
+                            })
+                    else:
+                        # Remove the most recent pending Stream_Ready (it's been acknowledged)
+                        pending_stream_ready.pop(0)
+        
+        # Validate: If Receiver initially received RepeaterAuth_Stream_Manage, it shall send RepeaterAuth_Stream_Ready
+        if receiver_initial_received == "RepeaterAuth_Stream_Manage" and not stream_ready_sent_after_stream_manage:
+            errors.append({
+                'type': 'missing_stream_ready_after_stream_manage',
+                'severity': 'error',
+                'description': f"Receiver initially received RepeaterAuth_Stream_Manage (packet #{stream_manage_packet}) but did not send RepeaterAuth_Stream_Ready in response",
+                'packet_number': stream_manage_packet if stream_manage_packet else None,
+                'timestamp': next((m.get('timestamp', 0) for m in messages if m.get('hkep', {}).get('message_type') == "RepeaterAuth_Stream_Manage"), 0),
+                'expected': 'Receiver shall send RepeaterAuth_Stream_Ready if it initially received RepeaterAuth_Stream_Manage (per section 13.2.1)',
+                'hkep_section': '13.2.1'
+            })
+        
+        # Validate: If Sender initially received RepeaterAuth_Send_ReceiverID_List, it shall send RepeaterAuth_Send_Ack
+        if sender_initial_received == "RepeaterAuth_Send_ReceiverID_List" and not send_ack_sent_after_receiverid_list:
+            if not is_reconnect:  # In reconnect, Send_Ack might have been sent in previous exchange
+                # Find the actual packet where Sender received RepeaterAuth_Send_ReceiverID_List
+                sender_received_packet = receiverid_list_packet
+                sender_received_timestamp = 0
+                if not sender_received_packet:
+                    # Fallback: find first RepeaterAuth_Send_ReceiverID_List message TO Sender
+                    for msg in sorted(messages, key=lambda x: x.get('timestamp', 0)):
+                        hkep_data = msg.get('hkep', {})
+                        if (hkep_data.get('message_type') == "RepeaterAuth_Send_ReceiverID_List" and
+                            hkep_data.get('direction') == "Decoder->Encoder"):  # TO Sender
+                            sender_received_packet = msg.get('packet_number')
+                            sender_received_timestamp = msg.get('timestamp', 0)
+                            break
+                
+                errors.append({
+                    'type': 'missing_send_ack_after_receiverid_list',
+                    'severity': 'error',
+                    'description': f"Sender initially received RepeaterAuth_Send_ReceiverID_List (packet #{sender_received_packet}) but did not send RepeaterAuth_Send_Ack in response",
+                    'packet_number': sender_received_packet,
+                    'timestamp': sender_received_timestamp,
+                    'expected': 'Sender shall send RepeaterAuth_Send_Ack if it initially received RepeaterAuth_Send_ReceiverID_List (per section 13.2.1)',
+                    'hkep_section': '13.2.1'
+                })
+        
+        # Check for unacknowledged Stream_Ready messages (warnings only)
+        for packet_num, timestamp in pending_stream_ready:
+            errors.append({
+                'type': 'unacknowledged_stream_ready',
+                'severity': 'warning',
+                'description': f"RepeaterAuth_Stream_Ready (packet #{packet_num}) was not followed by RepeaterAuth_Send_Ack",
+                'packet_number': packet_num,
+                'timestamp': timestamp,
+                'expected': 'RepeaterAuth_Stream_Ready should be followed by RepeaterAuth_Send_Ack',
+                'hkep_section': '13.2.1'
+            })
+        
+        return errors
+    
+    def print_hkep_message(self, result: Dict, violations: List[Dict] = None):
+        """
+        Pretty print a single HKEP message
+        
+        Args:
+            result: Message data dictionary
+            violations: List of validation violations for this packet (optional)
+        """
+        packet_num = result['packet_number']
+        
+        # Check if there are violations for this packet
+        has_violations = violations and len(violations) > 0
+        
+        # Print header with violation indicator
         print(f"\n{'='*80}")
-        print(f"Packet #{result['packet_number']} (HKEP #{result['hkep_packet_number']})")
+        if has_violations:
+            error_count = sum(1 for v in violations if v.get('severity') == 'error')
+            warning_count = sum(1 for v in violations if v.get('severity') == 'warning')
+            violation_marker = f" [VIOLATION: {error_count} error(s), {warning_count} warning(s)]"
+            print(f"Packet #{packet_num} (HKEP #{result['hkep_packet_number']}){violation_marker}")
+        else:
+            print(f"Packet #{packet_num} (HKEP #{result['hkep_packet_number']})")
+        
         print(f"{result['src_ip']}:{result['src_port']} -> {result['dst_ip']}:{result['dst_port']}")
         if result.get('tcp_flags'):
             print(f"TCP: SEQ={result['tcp_seq']}, ACK={result.get('tcp_ack', 'N/A')}, Flags=[{result['tcp_flags']}]")
@@ -1625,6 +2065,17 @@ class HKEPDissector:
         
         hkep = result['hkep']
         print(f"HKEP Protocol: {hkep.get('message_type', 'Unknown')}")
+        
+        # Print violations inline if present
+        if has_violations:
+            print(f"\n  *** SECTION 13.2 VALIDATION VIOLATIONS ***")
+            for violation in violations:
+                severity_marker = "[ERROR]" if violation.get('severity') == 'error' else "[WARNING]"
+                print(f"    {severity_marker} {violation.get('description', 'Unknown violation')}")
+                print(f"      Expected: {violation.get('expected', 'N/A')}")
+                if violation.get('note'):
+                    print(f"      Note: {violation.get('note')}")
+            print(f"  {'-'*76}")
         
         for key, value in hkep.items():
             if key in ['message_type']:
@@ -1659,6 +2110,13 @@ Examples:
   %(prog)s capture.pcap --port 48879
   %(prog)s capture.pcap --quiet
   %(prog)s capture.pcap --output results.txt
+  %(prog)s capture.pcap --validate-sequence
+  %(prog)s capture.pcap --validate-sequence --output results.json
+  
+The --validate-sequence option validates all HKEP section 13.2 requirements:
+  - Initial message exchange (Receiver/Sender first messages)
+  - Message sequences (Stream_Manage->Stream_Ready, Send_ReceiverID_List->Send_Ack)
+  - Stream_Ready/Send_Ack ordering
         """
     )
     
@@ -1672,6 +2130,8 @@ Examples:
                         help='Disable TCP stream reassembly (not recommended)')
     parser.add_argument('--show-tcp-issues', action='store_true',
                         help='Show warnings for TCP retransmissions, fragmentation, etc.')
+    parser.add_argument('--validate-sequence', action='store_true',
+                        help='Validate all HKEP section 13.2 requirements (initial messages, message sequences)')
     
     args = parser.parse_args()
     
@@ -1683,8 +2143,13 @@ Examples:
         args.pcap_file, 
         verbose=not args.quiet,
         handle_reassembly=not args.no_reassembly,
-        show_tcp_issues=args.show_tcp_issues
+        show_tcp_issues=args.show_tcp_issues,
+        validate_sequence=args.validate_sequence
     )
+    
+    # Validate sequence if requested
+    if args.validate_sequence:
+        validation_results = dissector.validate_all_exchanges(results, verbose=not args.quiet)
     
     # Write to JSON if requested
     if args.output:
@@ -1699,6 +2164,7 @@ Examples:
             }
 
             for exchange in results.get_all_exchanges():
+                is_reconnect = dissector._is_reconnect_exchange(exchange)
                 exchange_data = {
                     'stream_key': exchange.stream_key,
                     'src_ip': exchange.src_ip,
@@ -1711,10 +2177,36 @@ Examples:
                     'end_time': exchange.end_time,
                     'successful': exchange.is_successful(),
                     'disconnection_reason': exchange.disconnection_reason,
+                    'is_reconnect': is_reconnect,
                     'messages': exchange.get_messages()
                 }
                 output_data['exchanges'].append(exchange_data)
 
+            # Add validation results if available
+            if args.validate_sequence and 'validation_results' in locals():
+                output_data['sequence_validation'] = {
+                    'total_errors': validation_results['total_errors'],
+                    'total_warnings': validation_results['total_warnings'],
+                    'total_issues': validation_results['total_issues'],
+                    'exchanges_with_errors': len(validation_results['exchange_errors']),
+                    'errors_by_exchange': {
+                        stream_key: [
+                            {
+                                'type': e['type'],
+                                'severity': e['severity'],
+                                'description': e['description'],
+                                'packet_number': e['packet_number'],
+                                'timestamp': e['timestamp'],
+                                'expected': e['expected'],
+                                'hkep_section': e['hkep_section'],
+                                'note': e.get('note')  # Include note if present
+                            }
+                            for e in errors
+                        ]
+                        for stream_key, errors in validation_results['exchange_errors'].items()
+                    }
+                }
+            
             with open(args.output, 'w') as f:
                 json.dump(output_data, f, indent=2)
             print(f"\nResults written to {args.output}")
