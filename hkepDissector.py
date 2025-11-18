@@ -45,19 +45,41 @@ except ImportError:
 
 
 class HKEPExchange:
-    """Represents a single HKEP protocol exchange (TCP connection)"""
+    """Represents a single HKEP protocol exchange (HKEP session identified by receiverId, nodeId, portId)"""
 
-    def __init__(self, stream_key: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int):
-        self.stream_key = stream_key
-        self.src_ip = src_ip
-        self.src_port = src_port
-        self.dst_ip = dst_ip
-        self.dst_port = dst_port
+    def __init__(self, session_key: str, receiver_id: str, node_id: str, port_id: str):
+        """
+        Initialize HKEP exchange with session tuple
+        
+        Args:
+            session_key: Unique key for this session: "(receiverId, nodeId, portId)"
+            receiver_id: Receiver ID from AKE_PreInit
+            node_id: Node ID from AKE_PreInit
+            port_id: Port ID from AKE_PreInit
+        """
+        self.session_key = session_key
+        self.receiver_id = receiver_id
+        self.node_id = node_id
+        self.port_id = port_id
+        self.tcp_connections = []  # List of (stream_key, src_ip, src_port, dst_ip, dst_port) tuples
         self.messages = []
         self.start_time = None
         self.end_time = None
         self.connection_state = 'unknown'
         self.disconnection_reason = None
+    
+    def add_tcp_connection(self, stream_key: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int):
+        """Add a TCP connection to this HKEP session"""
+        conn_info = (stream_key, src_ip, src_port, dst_ip, dst_port)
+        if conn_info not in self.tcp_connections:
+            self.tcp_connections.append(conn_info)
+    
+    @property
+    def stream_key(self):
+        """Backward compatibility: return first TCP connection's stream_key"""
+        if self.tcp_connections:
+            return self.tcp_connections[0][0]
+        return self.session_key
 
     def add_message(self, message: Dict):
         """Add a message to this exchange"""
@@ -101,7 +123,8 @@ class HKEPExchange:
         return self.disconnection_reason is None or self.disconnection_reason == 'FIN'
 
     def __str__(self):
-        return f"HKEPExchange({self.stream_key}, {self.get_message_count()} messages, {self.get_duration():.3f}s)"
+        tcp_info = f", {len(self.tcp_connections)} TCP connection(s)" if len(self.tcp_connections) > 1 else ""
+        return f"HKEPExchange(session={self.session_key}{tcp_info}, {self.get_message_count()} messages, {self.get_duration():.3f}s)"
 
 
 class HKEPAnalysisResult:
@@ -130,9 +153,17 @@ class HKEPAnalysisResult:
         return [ex for ex in self.exchanges if not ex.is_successful()]
 
     def get_exchange_by_stream_key(self, stream_key: str) -> Optional[HKEPExchange]:
-        """Get exchange by stream key"""
+        """Get exchange by stream key (searches all TCP connections)"""
         for ex in self.exchanges:
-            if ex.stream_key == stream_key:
+            for conn_stream_key, _, _, _, _ in ex.tcp_connections:
+                if conn_stream_key == stream_key:
+                    return ex
+        return None
+    
+    def get_exchange_by_session_key(self, session_key: str) -> Optional[HKEPExchange]:
+        """Get exchange by session key (receiverId, nodeId, portId)"""
+        for ex in self.exchanges:
+            if ex.session_key == session_key:
                 return ex
         return None
 
@@ -1339,12 +1370,46 @@ class HKEPDissector:
         
         return results
     
+    def _get_or_create_exchange(self, exchanges: Dict, stream_to_session: Dict, stream_key: str, 
+                                src_ip: str, src_port: int, dst_ip: str, dst_port: int,
+                                receiver_id: str = None, node_id: str = None, port_id: str = None) -> tuple:
+        """
+        Get or create an HKEP exchange based on session tuple or stream_key
+        
+        Returns:
+            (exchange, session_key) tuple
+        """
+        # If we have session tuple (from AKE_PreInit), use it
+        if receiver_id is not None and node_id is not None and port_id is not None:
+            session_key = f"({receiver_id}, {node_id}, {port_id})"
+            
+            # Create or get exchange for this session
+            if session_key not in exchanges:
+                exchanges[session_key] = HKEPExchange(session_key, receiver_id, node_id, port_id)
+            
+            exchange = exchanges[session_key]
+            exchange.add_tcp_connection(stream_key, src_ip, src_port, dst_ip, dst_port)
+            stream_to_session[stream_key] = session_key
+            return exchange, session_key
+        
+        # Otherwise, check if we've seen this stream before (from a previous AKE_PreInit)
+        if stream_key in stream_to_session:
+            session_key = stream_to_session[stream_key]
+            exchange = exchanges[session_key]
+            exchange.add_tcp_connection(stream_key, src_ip, src_port, dst_ip, dst_port)
+            return exchange, session_key
+        
+        # No session tuple yet and haven't seen this stream - return None
+        # Messages before AKE_PreInit are not part of an HKEP exchange and are ignored
+        return None, None
+
     def _analyze_with_proper_reassembly(self, packets: List, verbose: bool, show_tcp_issues: bool) -> HKEPAnalysisResult:
         """Analyze using proper TCP stream reassembly - gets ALL messages"""
         analysis_result = HKEPAnalysisResult()
         analysis_result.total_packets = len(packets)
 
-        exchanges = {}  # stream_key -> HKEPExchange
+        exchanges = {}  # session_key -> HKEPExchange (keyed by "(receiverId, nodeId, portId)")
+        stream_to_session = {}  # stream_key -> session_key (maps TCP connection to HKEP session)
         tcp_connections = {}
         stream_data = {}  # stream_key -> {'forward': [(seq, len, payload, pkt_num, packet)], 'reverse': [...]}
         timeline_events = []  # List of events in chronological order: (pkt_num, timestamp, event_type, event_data)
@@ -1448,19 +1513,79 @@ class HKEPDissector:
         # Collect HKEP messages with their packet info for timeline
         hkep_messages = []  # List of (pkt_num, timestamp, hkep_data, stream_info)
         
+        # First pass: Find all AKE_PreInit messages to establish session mappings
+        # This ensures we can associate all messages with the correct exchange
         for stream_key, directions in stream_data.items():
-            # Create exchange object for this stream if it doesn't exist
-            if stream_key not in exchanges:
-                # Get metadata from first packet in either direction
-                first_direction = 'forward' if directions['forward'] else 'reverse'
-                first_packet = directions[first_direction][0][4] if directions[first_direction] else None
-                if first_packet:
-                    tcp_layer = first_packet[TCP]
-                    src_ip = first_packet[IP].src if first_packet.haslayer(IP) else "unknown"
-                    dst_ip = first_packet[IP].dst if first_packet.haslayer(IP) else "unknown"
-                    src_port = tcp_layer.sport
-                    dst_port = tcp_layer.dport
-                    exchanges[stream_key] = HKEPExchange(stream_key, src_ip, src_port, dst_ip, dst_port)
+            # Get metadata from first packet in either direction
+            first_direction = 'forward' if directions['forward'] else 'reverse'
+            first_packet = directions[first_direction][0][4] if directions[first_direction] else None
+            if not first_packet:
+                continue
+            tcp_layer = first_packet[TCP]
+            src_ip = first_packet[IP].src if first_packet.haslayer(IP) else "unknown"
+            dst_ip = first_packet[IP].dst if first_packet.haslayer(IP) else "unknown"
+            src_port = tcp_layer.sport
+            dst_port = tcp_layer.dport
+            
+            # Look for AKE_PreInit in all directions to establish session
+            for direction_name in ['forward', 'reverse']:
+                direction_packets = directions[direction_name]
+                if not direction_packets:
+                    continue
+                
+                # Check individual packets for AKE_PreInit
+                for seq, length, payload, pkt_num, packet in direction_packets:
+                    if len(payload) < 3:
+                        continue
+                    is_complete, expected_length = self.is_complete_hkep_message(payload)
+                    if is_complete and len(payload) >= expected_length:
+                        hkep_data = self.dissect_hkep_message(payload[:expected_length])
+                        if hkep_data and hkep_data.get('message_type') == 'AKE_PreInit':
+                            receiver_id = hkep_data.get('receiverId')
+                            node_id = hkep_data.get('nodeId')
+                            port_id = hkep_data.get('portId')
+                            if receiver_id and node_id and port_id:
+                                # Create exchange and map stream to session
+                                exchange, session_key = self._get_or_create_exchange(
+                                    exchanges, stream_to_session, stream_key, src_ip, src_port, dst_ip, dst_port,
+                                    receiver_id, node_id, port_id
+                                )
+                                break
+                
+                # Also check reassembled blocks for AKE_PreInit
+                contiguous_blocks = self._find_contiguous_blocks(direction_packets)
+                for block_data, block_packets in contiguous_blocks:
+                    if len(block_data) < 3:
+                        continue
+                    messages_from_block = self._extract_messages_from_block(
+                        block_data, block_packets, stream_key, direction_name, 0
+                    )
+                    for msg_result in messages_from_block:
+                        hkep_data = msg_result.get("hkep", {})
+                        if hkep_data.get('message_type') == 'AKE_PreInit':
+                            receiver_id = hkep_data.get('receiverId')
+                            node_id = hkep_data.get('nodeId')
+                            port_id = hkep_data.get('portId')
+                            if receiver_id and node_id and port_id:
+                                # Create exchange and map stream to session
+                                exchange, session_key = self._get_or_create_exchange(
+                                    exchanges, stream_to_session, stream_key, src_ip, src_port, dst_ip, dst_port,
+                                    receiver_id, node_id, port_id
+                                )
+                                break
+        
+        # Second pass: Process all messages and associate with exchanges
+        for stream_key, directions in stream_data.items():
+            # Get metadata from first packet in either direction
+            first_direction = 'forward' if directions['forward'] else 'reverse'
+            first_packet = directions[first_direction][0][4] if directions[first_direction] else None
+            if not first_packet:
+                continue
+            tcp_layer = first_packet[TCP]
+            src_ip = first_packet[IP].src if first_packet.haslayer(IP) else "unknown"
+            dst_ip = first_packet[IP].dst if first_packet.haslayer(IP) else "unknown"
+            src_port = tcp_layer.sport
+            dst_port = tcp_layer.dport
 
             # Process each direction - collect ALL packets and try multiple approaches
             for direction_name in ['forward', 'reverse']:
@@ -1490,8 +1615,27 @@ class HKEPDissector:
                         # Try to parse this individual packet
                         hkep_data = self.dissect_hkep_message(payload[:expected_length])
                         if hkep_data and hkep_data.get('msg_id') in self.MSG_TYPES:
+                            # Get exchange for this stream (should already exist from first pass)
+                            if stream_key not in stream_to_session:
+                                # No AKE_PreInit found in this stream - skip this message
+                                # Messages without AKE_PreInit are not part of an HKEP exchange
+                                if verbose:
+                                    print(f"    Packet #{pkt_num}: HKEP message without AKE_PreInit in stream, ignoring (not part of HKEP exchange)")
+                                continue
+                            
+                            session_key = stream_to_session[stream_key]
+                            exchange = exchanges[session_key]
+                            
+                            # If this is AKE_PreInit, ensure exchange is set up (should already be done)
+                            if hkep_data.get('message_type') == 'AKE_PreInit':
+                                receiver_id = hkep_data.get('receiverId')
+                                node_id = hkep_data.get('nodeId')
+                                port_id = hkep_data.get('portId')
+                                if receiver_id and node_id and port_id:
+                                    # Ensure TCP connection is registered
+                                    exchange.add_tcp_connection(stream_key, src_ip, src_port, dst_ip, dst_port)
+                            
                             # Check if we already processed this message from a block
-                            exchange = exchanges[stream_key]
                             already_processed = any(
                                 msg['packet_number'] == pkt_num for msg in exchange.messages
                             )
@@ -1509,6 +1653,7 @@ class HKEPDissector:
                                     "dst_port": tcp_layer.dport,
                                     "timestamp": timestamp,
                                     "stream": stream_key,
+                                    "session": session_key,
                                     "direction": direction_name,
                                     "hkep": hkep_data
                                 }
@@ -1541,8 +1686,28 @@ class HKEPDissector:
                     )
 
                     for msg_result in messages_from_block:
+                        # Get exchange for this stream (should already exist from first pass)
+                        if stream_key not in stream_to_session:
+                            # No AKE_PreInit found in this stream - skip this message
+                            # Messages without AKE_PreInit are not part of an HKEP exchange
+                            if verbose:
+                                print(f"    Packet #{msg_result['packet_number']}: HKEP message without AKE_PreInit in stream, ignoring (not part of HKEP exchange)")
+                            continue
+                        
+                        session_key = stream_to_session[stream_key]
+                        exchange = exchanges[session_key]
+                        hkep_data = msg_result.get("hkep", {})
+                        
+                        # If this is AKE_PreInit, ensure exchange is set up (should already be done)
+                        if hkep_data.get('message_type') == 'AKE_PreInit':
+                            receiver_id = hkep_data.get('receiverId')
+                            node_id = hkep_data.get('nodeId')
+                            port_id = hkep_data.get('portId')
+                            if receiver_id and node_id and port_id:
+                                # Ensure TCP connection is registered
+                                exchange.add_tcp_connection(stream_key, src_ip, src_port, dst_ip, dst_port)
+                        
                         # Check if we already processed this message from individual packet processing
-                        exchange = exchanges[stream_key]
                         already_processed = any(
                             msg['packet_number'] == msg_result["packet_number"] for msg in exchange.messages
                         )
@@ -1558,6 +1723,7 @@ class HKEPDissector:
                                 "dst_port": tcp_layer.dport,
                                 "timestamp": msg_result["timestamp"],
                                 "stream": stream_key,
+                                "session": session_key,
                                 "direction": direction_name,
                                 "hkep": msg_result["hkep"]
                             }
@@ -1721,7 +1887,7 @@ class HKEPDissector:
         for exchange in analysis_result.get_all_exchanges():
             errors = validate_func(exchange)
             if errors:
-                exchange_errors[exchange.stream_key] = errors
+                exchange_errors[exchange.session_key] = errors
                 all_errors.extend(errors)
         
         if verbose and all_errors:
@@ -1734,12 +1900,13 @@ class HKEPDissector:
             
             print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings)")
             
-            for stream_key, errors in exchange_errors.items():
-                exchange = analysis_result.get_exchange_by_stream_key(stream_key)
+            for session_key, errors in exchange_errors.items():
+                exchange = analysis_result.get_exchange_by_session_key(session_key)
                 is_reconnect = exchange and self._is_reconnect_exchange(exchange) if exchange else False
                 reconnect_note = " (RECONNECT)" if is_reconnect else ""
+                tcp_info = f" [{len(exchange.tcp_connections)} TCP connection(s)]" if exchange and len(exchange.tcp_connections) > 1 else ""
                 
-                print(f"\n  Exchange: {stream_key}{reconnect_note}")
+                print(f"\n  Exchange: {session_key}{tcp_info}{reconnect_note}")
                 for error in errors:
                     severity_marker = "[ERROR]" if error['severity'] == 'error' else "[WARNING]"
                     print(f"    {severity_marker} {error['description']}")
@@ -2999,11 +3166,25 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
             for exchange in results.get_all_exchanges():
                 is_reconnect = dissector._is_reconnect_exchange(exchange)
                 exchange_data = {
-                    'stream_key': exchange.stream_key,
-                    'src_ip': exchange.src_ip,
-                    'src_port': exchange.src_port,
-                    'dst_ip': exchange.dst_ip,
-                    'dst_port': exchange.dst_port,
+                    'session_key': exchange.session_key,
+                    'receiver_id': exchange.receiver_id,
+                    'node_id': exchange.node_id,
+                    'port_id': exchange.port_id,
+                    'tcp_connections': [
+                        {
+                            'stream_key': conn[0],
+                            'src_ip': conn[1],
+                            'src_port': conn[2],
+                            'dst_ip': conn[3],
+                            'dst_port': conn[4]
+                        }
+                        for conn in exchange.tcp_connections
+                    ],
+                    # Backward compatibility: use first TCP connection's endpoints
+                    'src_ip': exchange.tcp_connections[0][1] if exchange.tcp_connections else None,
+                    'src_port': exchange.tcp_connections[0][2] if exchange.tcp_connections else None,
+                    'dst_ip': exchange.tcp_connections[0][3] if exchange.tcp_connections else None,
+                    'dst_port': exchange.tcp_connections[0][4] if exchange.tcp_connections else None,
                     'message_count': exchange.get_message_count(),
                     'duration': exchange.get_duration(),
                     'start_time': exchange.start_time,
@@ -3023,7 +3204,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                     'total_issues': validation_results_12_6['total_issues'],
                     'exchanges_with_errors': len(validation_results_12_6['exchange_errors']),
                     'errors_by_exchange': {
-                        stream_key: [
+                        session_key: [
                             {
                                 'type': e['type'],
                                 'severity': e['severity'],
@@ -3036,7 +3217,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             }
                             for e in errors
                         ]
-                        for stream_key, errors in validation_results_12_6['exchange_errors'].items()
+                        for session_key, errors in validation_results_12_6['exchange_errors'].items()
                     }
                 }
             
@@ -3047,7 +3228,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                     'total_issues': validation_results_12_7['total_issues'],
                     'exchanges_with_errors': len(validation_results_12_7['exchange_errors']),
                     'errors_by_exchange': {
-                        stream_key: [
+                        session_key: [
                             {
                                 'type': e['type'],
                                 'severity': e['severity'],
@@ -3060,7 +3241,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             }
                             for e in errors
                         ]
-                        for stream_key, errors in validation_results_12_7['exchange_errors'].items()
+                        for session_key, errors in validation_results_12_7['exchange_errors'].items()
                     }
                 }
             
@@ -3071,7 +3252,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                     'total_issues': validation_results_13_1['total_issues'],
                     'exchanges_with_errors': len(validation_results_13_1['exchange_errors']),
                     'errors_by_exchange': {
-                        stream_key: [
+                        session_key: [
                             {
                                 'type': e['type'],
                                 'severity': e['severity'],
@@ -3084,7 +3265,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             }
                             for e in errors
                         ]
-                        for stream_key, errors in validation_results_13_1['exchange_errors'].items()
+                        for session_key, errors in validation_results_13_1['exchange_errors'].items()
                     }
                 }
             
@@ -3095,7 +3276,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                     'total_issues': validation_results_13_2['total_issues'],
                     'exchanges_with_errors': len(validation_results_13_2['exchange_errors']),
                     'errors_by_exchange': {
-                        stream_key: [
+                        session_key: [
                             {
                                 'type': e['type'],
                                 'severity': e['severity'],
@@ -3108,7 +3289,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             }
                             for e in errors
                         ]
-                        for stream_key, errors in validation_results_13_2['exchange_errors'].items()
+                        for session_key, errors in validation_results_13_2['exchange_errors'].items()
                     }
                 }
             
@@ -3119,7 +3300,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                     'total_issues': validation_results_13_3['total_issues'],
                     'exchanges_with_errors': len(validation_results_13_3['exchange_errors']),
                     'errors_by_exchange': {
-                        stream_key: [
+                        session_key: [
                             {
                                 'type': e['type'],
                                 'severity': e['severity'],
@@ -3132,7 +3313,7 @@ The --validate-13-3 option validates all HKEP section 13.3 requirements:
                             }
                             for e in errors
                         ]
-                        for stream_key, errors in validation_results_13_3['exchange_errors'].items()
+                        for session_key, errors in validation_results_13_3['exchange_errors'].items()
                     }
                 }
 
@@ -3157,7 +3338,11 @@ def example_programmatic_usage():
 
     # Analyze each exchange
     for exchange in results.get_all_exchanges():
-        print(f"\nExchange: {exchange.stream_key}")
+        print(f"\nExchange: {exchange.session_key}")
+        if len(exchange.tcp_connections) > 1:
+            print(f"  TCP Connections: {len(exchange.tcp_connections)}")
+            for i, (conn_stream_key, conn_src_ip, conn_src_port, conn_dst_ip, conn_dst_port) in enumerate(exchange.tcp_connections, 1):
+                print(f"    {i}. {conn_stream_key} ({conn_src_ip}:{conn_src_port} <-> {conn_dst_ip}:{conn_dst_port})")
         print(f"  Duration: {exchange.get_duration():.3f} seconds")
         print(f"  Messages: {exchange.get_message_count()}")
         print(f"  Successful: {exchange.is_successful()}")
