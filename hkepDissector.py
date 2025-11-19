@@ -3004,27 +3004,31 @@ class HKEPDissector:
     def validate_section_12_6(self, exchange: HKEPExchange) -> List[Dict]:
         """
         Validate all requirements of HKEP section 12.6 (The receiver protocol)
-        
+
         Per VSF TR-10-5:2024 section 12.6:
         12.6 Main requirements:
         - AKE_PreInit shall always be the first message exchanged after TCP/IP connection
         - AKE_PreInit.receiver attribute shall be true
-        
+
         12.6.1 With explicit pairing (pairing=true):
         - Sender shall respond with AKE_PreInitStatus
         - If statusInvalidParameters, connection shall be closed
         - Otherwise statusPairingExpired, start HDCP protocol with AKE_Init
         - Receiver waits for AKE_PreInitStatus, then receives AKE_Init
-        
+
         12.6.2 With implicit pairing (pairing=false):
         - Sender shall respond with AKE_PreInitStatus with appropriate status
         - Receiver behavior based on status value
-        
+
         12.6.3 With reconnect:
         - restart/REAUTH_REQ should be false when reconnecting after session is valid
         - When restart/REAUTH_REQ is false, Receiver sends RepeaterAuth_Send_ReceiverID_List or Null
         - Sender sends RepeaterAuth_Stream_Manage or Null
-        
+
+        Additional HKEP requirements:
+        - HDCP Protocol Descriptor must be 0x01 (HDCP v2.2+ compliance) (section 9.3.2)
+        - Receivers must be HDCP Repeaters (REPEATER flag must be true) (sections 7.1, 9.3.1)
+
         Returns:
             List of validation errors (empty if sequence is valid)
         """
@@ -3354,7 +3358,41 @@ class HKEPDissector:
                         'expected': 'When reconnecting with restart/REAUTH_REQ=false, Sender shall send RepeaterAuth_Stream_Manage or Null (per section 12.6.3)',
                         'hkep_section': '12.6.3'
                     })
-        
+
+        # HKEP Section 9.3.2: HDCP Protocol Descriptor Validation
+        # "HDCP Device Key Set associated with an RXip Port shall have an HDCP Protocol Descriptor value equal to 0x01 to indicate an HDCP v2.2+ compliant device"
+        for msg in sorted_messages:
+            hkep_data = msg.get('hkep', {})
+            msg_type = hkep_data.get('message_type')
+
+            if msg_type == "AKE_Send_Cert":
+                protocol_descriptor = hkep_data.get('Protocol_Descriptor', 0)
+                if protocol_descriptor != 1:  # 0x01 = 1 in decimal
+                    errors.append({
+                        'type': 'invalid_hdcp_protocol_descriptor',
+                        'severity': 'error',
+                        'description': f"HDCP Protocol Descriptor must be 0x01 (HDCP v2.2+ compliant), got {protocol_descriptor:#04x} (packet #{msg.get('packet_number')})",
+                        'packet_number': msg.get('packet_number'),
+                        'timestamp': msg.get('timestamp', 0),
+                        'expected': 'HDCP Device Key Set must have Protocol Descriptor = 0x01 for HDCP v2.2+ compliance (per section 9.3.2)',
+                        'hkep_section': '9.3.2'
+                    })
+
+                # HKEP Sections 7.1, 9.3.1: Receiver Must Be HDCP Repeater
+                # "A Receiver in an IP-based HDCP System is an HDCP Repeater"
+                # "A Receiver subscribing to a Sender's HDCP Content shall behave as a Self-Subscribing HDCP Repeater"
+                repeater_flag = hkep_data.get('REPEATER', False)
+                if not repeater_flag:
+                    errors.append({
+                        'type': 'receiver_must_be_hdcp_repeater',
+                        'severity': 'error',
+                        'description': f"HKEP receivers must behave as HDCP Repeaters (REPEATER flag is false in packet #{msg.get('packet_number')})",
+                        'packet_number': msg.get('packet_number'),
+                        'timestamp': msg.get('timestamp', 0),
+                        'expected': 'Receivers in HKEP systems must be HDCP Repeaters (REPEATER flag must be true) (per sections 7.1, 9.3.1)',
+                        'hkep_section': '7.1, 9.3.1'
+                    })
+
         return errors
     
     def validate_section_12_7(self, exchange: HKEPExchange) -> List[Dict]:
@@ -4161,6 +4199,8 @@ The --validate-12-6 option validates all HKEP section 12.6 requirements:
   - AKE_PreInit.receiver attribute must be true
   - AKE_PreInitStatus response requirements
   - Reconnect message requirements
+  - HDCP Protocol Descriptor must be 0x01 (v2.2+ compliance)
+  - Receivers must be HDCP Repeaters (REPEATER flag must be true)
 
 The --validate-12-7 option validates all HKEP section 12.7 requirements:
   - AKE_PreInit must be first message
