@@ -67,6 +67,8 @@ class HKEPExchange:
         self.end_time = None
         self.connection_state = 'unknown'
         self.disconnection_reason = None
+        self.is_complete = None  # True if exchange is complete enough to validate, False if incomplete/invalid
+        self.incomplete_reason = None  # Why exchange is incomplete
     
     def add_tcp_connection(self, stream_key: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int):
         """Add a TCP connection to this HKEP session"""
@@ -121,6 +123,66 @@ class HKEPExchange:
     def is_successful(self) -> bool:
         """Check if the exchange completed successfully"""
         return self.disconnection_reason is None or self.disconnection_reason == 'FIN'
+    
+    def validate_completeness(self) -> tuple[bool, str]:
+        """
+        Check if exchange has the proper initial sequence to be considered valid.
+        Returns: (is_complete, reason_if_incomplete)
+        
+        A valid HKEP exchange MUST start with:
+        1. TCP connection established (implicit - we have messages)
+        2. Client (Decoder) sends AKE_PreInit → Server (Encoder)
+        3. Server (Encoder) responds AKE_PreInitStatus → Client (Decoder)
+        
+        Without this initial handshake sequence, the exchange is incomplete/invalid.
+        """
+        if not self.messages:
+            return False, "No messages in exchange"
+        
+        # Sort messages by timestamp to check sequence
+        sorted_messages = sorted(self.messages, key=lambda x: x.get('timestamp', 0))
+        
+        # Find AKE_PreInit (must be from Decoder->Encoder, i.e., client to server)
+        preinit_msg = None
+        preinit_index = None
+        for idx, msg in enumerate(sorted_messages):
+            if msg.get('hkep', {}).get('message_type') == 'AKE_PreInit':
+                preinit_msg = msg
+                preinit_index = idx
+                break
+        
+        if not preinit_msg:
+            return False, "Missing AKE_PreInit message (initial client request not captured)"
+        
+        # Verify AKE_PreInit direction is correct (Decoder->Encoder = client->server)
+        preinit_direction = preinit_msg.get('hkep', {}).get('direction', '')
+        if preinit_direction != 'Decoder->Encoder':
+            return False, f"AKE_PreInit has wrong direction '{preinit_direction}' (should be Decoder->Encoder)"
+        
+        # Find AKE_PreInitStatus (must be from Encoder->Decoder, i.e., server to client)
+        # It should come AFTER AKE_PreInit
+        preinitstatus_msg = None
+        for idx, msg in enumerate(sorted_messages[preinit_index + 1:], start=preinit_index + 1):
+            if msg.get('hkep', {}).get('message_type') == 'AKE_PreInitStatus':
+                preinitstatus_msg = msg
+                break
+        
+        if not preinitstatus_msg:
+            return False, "Missing AKE_PreInitStatus response (server response not captured)"
+        
+        # Verify AKE_PreInitStatus direction is correct (Encoder->Decoder = server->client)
+        preinitstatus_direction = preinitstatus_msg.get('hkep', {}).get('direction', '')
+        if preinitstatus_direction != 'Encoder->Decoder':
+            return False, f"AKE_PreInitStatus has wrong direction '{preinitstatus_direction}' (should be Encoder->Decoder)"
+        
+        # Verify the sequence: PreInit must come before PreInitStatus
+        preinit_time = preinit_msg.get('timestamp', 0)
+        preinitstatus_time = preinitstatus_msg.get('timestamp', 0)
+        if preinitstatus_time <= preinit_time:
+            return False, "AKE_PreInitStatus appears before AKE_PreInit (incorrect sequence)"
+        
+        # Initial handshake sequence is present and correct
+        return True, ""
 
     def __str__(self):
         tcp_info = f", {len(self.tcp_connections)} TCP connection(s)" if len(self.tcp_connections) > 1 else ""
@@ -1025,6 +1087,11 @@ class HKEPDissector:
                         hkep_data = self.dissect_hkep_message(msg_data)
 
                         if hkep_data and hkep_data.get('msg_id') in self.MSG_TYPES:
+                            # Set direction for Null messages based on TCP stream direction
+                            # forward = server->client (Encoder->Decoder), reverse = client->server (Decoder->Encoder)
+                            if hkep_data.get('message_type') == 'Null message' and 'direction' not in hkep_data:
+                                hkep_data['direction'] = 'Encoder->Decoder' if direction_name == 'forward' else 'Decoder->Encoder'
+                            
                             last_valid_offset = offset
 
                             # Find which packet contains this message
@@ -1381,20 +1448,38 @@ class HKEPDissector:
     
     def _get_or_create_exchange(self, exchanges: Dict, stream_to_session: Dict, stream_key: str, 
                                 src_ip: str, src_port: int, dst_ip: str, dst_port: int,
-                                receiver_id: str = None, node_id: str = None, port_id: str = None) -> tuple:
+                                receiver_id: str = None, node_id: str = None, port_id: str = None,
+                                is_new_preinit: bool = False) -> tuple:
         """
         Get or create an HKEP exchange based on session tuple or stream_key
+        
+        Args:
+            is_new_preinit: If True, indicates this is a new AKE_PreInit message, 
+                           potentially starting a new exchange (reconnection attempt)
         
         Returns:
             (exchange, session_key) tuple
         """
         # If we have session tuple (from AKE_PreInit), use it
         if receiver_id is not None and node_id is not None and port_id is not None:
-            session_key = f"({receiver_id}, {node_id}, {port_id})"
+            base_session_key = f"({receiver_id}, {node_id}, {port_id})"
             
-            # Create or get exchange for this session
-            if session_key not in exchanges:
+            # Check if we need to create a new exchange for a reconnection attempt
+            # If is_new_preinit is True and an exchange already exists for this session,
+            # this is a reconnection - create a new exchange with a unique suffix
+            if is_new_preinit and base_session_key in exchanges:
+                # This is a reconnection - create a new exchange with a unique suffix
+                # Find the next available suffix
+                suffix = 1
+                while f"{base_session_key}_{suffix}" in exchanges:
+                    suffix += 1
+                session_key = f"{base_session_key}_{suffix}"
                 exchanges[session_key] = HKEPExchange(session_key, receiver_id, node_id, port_id)
+            else:
+                # First time seeing this session, or not a new PreInit
+                session_key = base_session_key
+                if session_key not in exchanges:
+                    exchanges[session_key] = HKEPExchange(session_key, receiver_id, node_id, port_id)
             
             exchange = exchanges[session_key]
             exchange.add_tcp_connection(stream_key, src_ip, src_port, dst_ip, dst_port)
@@ -1522,6 +1607,27 @@ class HKEPDissector:
         # Collect HKEP messages with their packet info for timeline
         hkep_messages = []  # List of (pkt_num, timestamp, hkep_data, stream_info)
         
+        # Track AKE_PreInit packets to properly handle reconnections
+        # Each AKE_PreInit starts a new exchange, even with same session identifiers
+        preinit_packets = {}  # pkt_num -> (stream_key, receiver_id, node_id, port_id, timestamp)
+        stream_preinits = {}  # stream_key -> [(pkt_num, session_key)]  sorted by pkt_num
+        
+        # Helper function to find which exchange a packet belongs to
+        def find_exchange_for_packet(stream_key, pkt_num):
+            """Find the correct exchange for a packet based on AKE_PreInit boundaries"""
+            if stream_key not in stream_preinits:
+                return stream_to_session.get(stream_key), None
+            
+            # Find the most recent AKE_PreInit before this packet
+            preinits_for_stream = stream_preinits[stream_key]
+            session_key = None
+            for preinit_pkt, preinit_session in preinits_for_stream:
+                if preinit_pkt <= pkt_num:
+                    session_key = preinit_session
+                else:
+                    break
+            return session_key, exchanges.get(session_key) if session_key else None
+        
         # First pass: Find all AKE_PreInit messages to establish session mappings
         # This ensures we can associate all messages with the correct exchange
         for stream_key, directions in stream_data.items():
@@ -1554,11 +1660,17 @@ class HKEPDissector:
                             node_id = hkep_data.get('nodeId')
                             port_id = hkep_data.get('portId')
                             if receiver_id and node_id and port_id:
+                                timestamp = float(packet.time) if hasattr(packet, 'time') else 0
+                                preinit_packets[pkt_num] = (stream_key, receiver_id, node_id, port_id, timestamp)
                                 # Create exchange and map stream to session
                                 exchange, session_key = self._get_or_create_exchange(
                                     exchanges, stream_to_session, stream_key, src_ip, src_port, dst_ip, dst_port,
-                                    receiver_id, node_id, port_id
+                                    receiver_id, node_id, port_id, is_new_preinit=True
                                 )
+                                # Track this PreInit for packet-to-exchange mapping
+                                if stream_key not in stream_preinits:
+                                    stream_preinits[stream_key] = []
+                                stream_preinits[stream_key].append((pkt_num, session_key))
                                 break
                 
                 # Also check reassembled blocks for AKE_PreInit
@@ -1576,12 +1688,23 @@ class HKEPDissector:
                             node_id = hkep_data.get('nodeId')
                             port_id = hkep_data.get('portId')
                             if receiver_id and node_id and port_id:
+                                pkt_num = msg_result.get('packet_number')
+                                timestamp = msg_result.get('timestamp', 0)
+                                preinit_packets[pkt_num] = (stream_key, receiver_id, node_id, port_id, timestamp)
                                 # Create exchange and map stream to session
                                 exchange, session_key = self._get_or_create_exchange(
                                     exchanges, stream_to_session, stream_key, src_ip, src_port, dst_ip, dst_port,
-                                    receiver_id, node_id, port_id
+                                    receiver_id, node_id, port_id, is_new_preinit=True
                                 )
+                                # Track this PreInit for packet-to-exchange mapping
+                                if stream_key not in stream_preinits:
+                                    stream_preinits[stream_key] = []
+                                stream_preinits[stream_key].append((pkt_num, session_key))
                                 break
+        
+        # Sort stream_preinits by packet number to ensure proper ordering
+        for stream_key in stream_preinits:
+            stream_preinits[stream_key].sort(key=lambda x: x[0])
         
         # Second pass: Process all messages and associate with exchanges
         for stream_key, directions in stream_data.items():
@@ -1624,16 +1747,19 @@ class HKEPDissector:
                         # Try to parse this individual packet
                         hkep_data = self.dissect_hkep_message(payload[:expected_length])
                         if hkep_data and hkep_data.get('msg_id') in self.MSG_TYPES:
-                            # Get exchange for this stream (should already exist from first pass)
-                            if stream_key not in stream_to_session:
-                                # No AKE_PreInit found in this stream - skip this message
+                            # Set direction for Null messages based on TCP stream direction
+                            # forward = server->client (Encoder->Decoder), reverse = client->server (Decoder->Encoder)
+                            if hkep_data.get('message_type') == 'Null message' and 'direction' not in hkep_data:
+                                hkep_data['direction'] = 'Encoder->Decoder' if direction_name == 'forward' else 'Decoder->Encoder'
+                            
+                            # Get exchange for this packet based on AKE_PreInit boundaries
+                            session_key, exchange = find_exchange_for_packet(stream_key, pkt_num)
+                            if not session_key or not exchange:
+                                # No AKE_PreInit found before this message - skip
                                 # Messages without AKE_PreInit are not part of an HKEP exchange
                                 if verbose:
                                     print(f"    Packet #{pkt_num}: HKEP message without AKE_PreInit in stream, ignoring (not part of HKEP exchange)")
                                 continue
-                            
-                            session_key = stream_to_session[stream_key]
-                            exchange = exchanges[session_key]
                             
                             # If this is AKE_PreInit, ensure exchange is set up (should already be done)
                             if hkep_data.get('message_type') == 'AKE_PreInit':
@@ -1695,16 +1821,16 @@ class HKEPDissector:
                     )
 
                     for msg_result in messages_from_block:
-                        # Get exchange for this stream (should already exist from first pass)
-                        if stream_key not in stream_to_session:
-                            # No AKE_PreInit found in this stream - skip this message
+                        # Get exchange for this packet based on AKE_PreInit boundaries
+                        pkt_num = msg_result['packet_number']
+                        session_key, exchange = find_exchange_for_packet(stream_key, pkt_num)
+                        if not session_key or not exchange:
+                            # No AKE_PreInit found before this message - skip
                             # Messages without AKE_PreInit are not part of an HKEP exchange
                             if verbose:
-                                print(f"    Packet #{msg_result['packet_number']}: HKEP message without AKE_PreInit in stream, ignoring (not part of HKEP exchange)")
+                                print(f"    Packet #{pkt_num}: HKEP message without AKE_PreInit in stream, ignoring (not part of HKEP exchange)")
                             continue
                         
-                        session_key = stream_to_session[stream_key]
-                        exchange = exchanges[session_key]
                         hkep_data = msg_result.get("hkep", {})
                         
                         # If this is AKE_PreInit, ensure exchange is set up (should already be done)
@@ -1751,11 +1877,28 @@ class HKEPDissector:
         for exchange in exchanges.values():
             analysis_result.add_exchange(exchange)
         
+        # Check completeness of all exchanges first
+        incomplete_packet_set = set()  # Track packets from incomplete exchanges
+        for exchange in exchanges.values():
+            is_complete, incomplete_reason = exchange.validate_completeness()
+            exchange.is_complete = is_complete
+            exchange.incomplete_reason = incomplete_reason
+            
+            # If exchange is incomplete, track all its packet numbers
+            if not is_complete:
+                for msg in exchange.messages:
+                    pkt_num = msg.get('packet_number')
+                    if pkt_num:
+                        incomplete_packet_set.add(pkt_num)
+        
         # Build violation map: packet_number -> list of violations
         # Process in numerical section order: 12.6, 12.7, 13.1, 13.2, 13.3
+        # ONLY validate complete exchanges - incomplete exchanges are excluded
         violation_map = {}  # packet_number -> [violations]
         if hasattr(self, '_validate_12_6') and self._validate_12_6:
             for exchange in exchanges.values():
+                if not exchange.is_complete:
+                    continue  # Skip incomplete exchanges
                 errors = self.validate_section_12_6(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
@@ -1766,6 +1909,8 @@ class HKEPDissector:
         
         if hasattr(self, '_validate_12_7') and self._validate_12_7:
             for exchange in exchanges.values():
+                if not exchange.is_complete:
+                    continue  # Skip incomplete exchanges
                 errors = self.validate_section_12_7(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
@@ -1776,6 +1921,8 @@ class HKEPDissector:
         
         if hasattr(self, '_validate_13_1') and self._validate_13_1:
             for exchange in exchanges.values():
+                if not exchange.is_complete:
+                    continue  # Skip incomplete exchanges
                 errors = self.validate_section_13_1(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
@@ -1786,6 +1933,8 @@ class HKEPDissector:
         
         if hasattr(self, '_validate_13_2') and self._validate_13_2:
             for exchange in exchanges.values():
+                if not exchange.is_complete:
+                    continue  # Skip incomplete exchanges
                 errors = self.validate_section_13_2(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
@@ -1796,6 +1945,8 @@ class HKEPDissector:
         
         if hasattr(self, '_validate_13_3') and self._validate_13_3:
             for exchange in exchanges.values():
+                if not exchange.is_complete:
+                    continue  # Skip incomplete exchanges
                 errors = self.validate_section_13_3(exchange)
                 for error in errors:
                     pkt_num = error.get('packet_number')
@@ -1847,8 +1998,12 @@ class HKEPDissector:
                     print(f"{'='*80}")
                     print(f"\n{'#'*80} << END OF HKEP EXCHANGE (ABORTED)\n")
                 elif event['type'] == 'hkep_message':
-                    # Get violations for this packet if any
+                    # Skip packets from incomplete exchanges
                     pkt_num = event['result'].get('packet_number')
+                    if pkt_num in incomplete_packet_set:
+                        continue  # Don't show packets from incomplete exchanges
+                    
+                    # Get violations for this packet if any
                     violations = violation_map.get(pkt_num, [])
                     self.print_hkep_message(event['result'], violations)
 
@@ -1876,6 +2031,36 @@ class HKEPDissector:
         """
         all_errors = []
         exchange_errors = {}  # stream_key -> list of errors
+        
+        # First pass: check completeness of all exchanges (done ONCE for all validations)
+        incomplete_exchanges = []
+        for exchange in analysis_result.get_all_exchanges():
+            if not hasattr(exchange, 'is_complete') or exchange.is_complete is None:
+                # Completeness not yet checked - do it now
+                is_complete, incomplete_reason = exchange.validate_completeness()
+                exchange.is_complete = is_complete
+                exchange.incomplete_reason = incomplete_reason
+            
+            if not exchange.is_complete:
+                incomplete_exchanges.append((exchange, exchange.incomplete_reason))
+        
+        # Show incomplete exchanges warning (once, regardless of section)
+        if verbose and incomplete_exchanges and not hasattr(self, '_incomplete_warning_shown'):
+            print(f"\n{'='*80}")
+            print(f"⚠ INCOMPLETE EXCHANGES DETECTED")
+            print(f"{'='*80}")
+            print(f"\nThe following {len(incomplete_exchanges)} exchange(s) are INCOMPLETE and excluded from validation:")
+            print(f"(Likely due to missing packets or incomplete capture)\n")
+            for exchange, reason in incomplete_exchanges:
+                print(f"  • Exchange: {exchange.session_key}")
+                print(f"    Messages captured: {exchange.get_message_count()}")
+                print(f"    Reason: {reason}")
+                if exchange.messages:
+                    first_packet = min(m.get('packet_number', 0) for m in exchange.messages)
+                    last_packet = max(m.get('packet_number', 0) for m in exchange.messages)
+                    print(f"    Packet range: #{first_packet} - #{last_packet}")
+                print()
+            self._incomplete_warning_shown = True
         
         validate_func = None
         section_name = ""
@@ -1914,13 +2099,19 @@ class HKEPDissector:
                 
                 error_count = sum(1 for e in all_errors if e['severity'] == 'error')
                 warning_count = sum(1 for e in all_errors if e['severity'] == 'warning')
+                info_count = sum(1 for e in all_errors if e['severity'] == 'info')
                 
-                print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings)")
+                print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings, {info_count} info)")
                 
                 for session_key, errors in exchange_errors.items():
                     print(f"\n  Session: {session_key}")
                     for error in errors:
-                        severity_marker = "[ERROR]" if error['severity'] == 'error' else "[WARNING]"
+                        if error['severity'] == 'error':
+                            severity_marker = "[ERROR]"
+                        elif error['severity'] == 'warning':
+                            severity_marker = "[WARNING]"
+                        else:  # info
+                            severity_marker = "[INFO]"
                         print(f"    {severity_marker} {error['description']}")
                         print(f"      Packet: #{error['packet_number']}, Timestamp: {error['timestamp']:.6f}")
                         print(f"      Expected: {error['expected']}")
@@ -1953,7 +2144,12 @@ class HKEPDissector:
                 'all_errors': []
             }
         
+        # Validate only complete exchanges
         for exchange in analysis_result.get_all_exchanges():
+            # Skip incomplete exchanges
+            if not exchange.is_complete:
+                continue
+            
             errors = validate_func(exchange)
             if errors:
                 exchange_errors[exchange.session_key] = errors
@@ -1966,18 +2162,29 @@ class HKEPDissector:
             
             error_count = sum(1 for e in all_errors if e['severity'] == 'error')
             warning_count = sum(1 for e in all_errors if e['severity'] == 'warning')
+            info_count = sum(1 for e in all_errors if e['severity'] == 'info')
             
-            print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings)")
+            print(f"\nTotal validation issues: {len(all_errors)} ({error_count} errors, {warning_count} warnings, {info_count} info)")
             
             for session_key, errors in exchange_errors.items():
                 exchange = analysis_result.get_exchange_by_session_key(session_key)
+                
+                # Skip incomplete exchanges - they're already reported separately
+                if exchange and not exchange.is_complete:
+                    continue
+                
                 is_reconnect = exchange and self._is_reconnect_exchange(exchange) if exchange else False
                 reconnect_note = " (RECONNECT)" if is_reconnect else ""
                 tcp_info = f" [{len(exchange.tcp_connections)} TCP connection(s)]" if exchange and len(exchange.tcp_connections) > 1 else ""
                 
                 print(f"\n  Exchange: {session_key}{tcp_info}{reconnect_note}")
                 for error in errors:
-                    severity_marker = "[ERROR]" if error['severity'] == 'error' else "[WARNING]"
+                    if error['severity'] == 'error':
+                        severity_marker = "[ERROR]"
+                    elif error['severity'] == 'warning':
+                        severity_marker = "[WARNING]"
+                    else:  # info
+                        severity_marker = "[INFO]"
                     print(f"    {severity_marker} {error['description']}")
                     print(f"      Packet: #{error['packet_number']}, Timestamp: {error['timestamp']:.6f}")
                     print(f"      Expected: {error['expected']}")
@@ -2120,11 +2327,13 @@ class HKEPDissector:
         # We must only validate the first RepeaterAuth message, not any AKE/LC/SKE/RTT messages
         
         # RepeaterAuth message types (section 13.2 scope)
+        # Note: Null message is also a valid RepeaterAuth phase message
         repeaterauth_messages = [
             "RepeaterAuth_Send_ReceiverID_List",
             "RepeaterAuth_Send_Ack",
             "RepeaterAuth_Stream_Manage",
-            "RepeaterAuth_Stream_Ready"
+            "RepeaterAuth_Stream_Ready",
+            "Null message"
         ]
         
         if decoder_messages:
@@ -2365,6 +2574,429 @@ class HKEPDissector:
                 'hkep_section': '13.2.1'
             })
         
+        # 13.2.1: Receiver_AuthStatus Message Restrictions
+        # Per spec: "A Receiver should send a Receiver_AuthStatus message as required by the HDCP RTP v2.3 
+        # specification but a Sender shall not use it to establish the validity of an HKEP or HDCP RTP v2.3 session. 
+        # A Sender shall ignore the message if it receives it, as allowed by the HDCP RTP v2.3 specification...
+        # A Receiver shall not send a Receiver_AuthStatus message with REAUTH_REQ set false."
+        receiver_authstatus_messages = [msg for msg in sorted(messages, key=lambda x: x.get('timestamp', 0))
+                                        if msg.get('hkep', {}).get('message_type') == 'Receiver_AuthStatus']
+        
+        for authstatus_msg in receiver_authstatus_messages:
+            hkep_data = authstatus_msg.get('hkep', {})
+            reauth_req = hkep_data.get('REAUTH_REQ')
+            
+            # Validate: Receiver shall not send Receiver_AuthStatus with REAUTH_REQ=false
+            if reauth_req is False:
+                errors.append({
+                    'type': 'invalid_receiver_authstatus_reauth_req',
+                    'severity': 'error',
+                    'description': f"Receiver_AuthStatus (packet #{authstatus_msg.get('packet_number')}) has REAUTH_REQ set to false. Receiver shall not send Receiver_AuthStatus with REAUTH_REQ=false.",
+                    'packet_number': authstatus_msg.get('packet_number'),
+                    'timestamp': authstatus_msg.get('timestamp', 0),
+                    'expected': 'Receiver shall not send Receiver_AuthStatus message with REAUTH_REQ set false (per section 13.2.1)',
+                    'hkep_section': '13.2.1',
+                    'note': 'Receiver communicates REAUTH_REQ state to Sender through AKE_PreInit message using restart/REAUTH_REQ flag, not through Receiver_AuthStatus'
+                })
+            
+            # Note: We could also check if connection closes after Receiver_AuthStatus with REAUTH_REQ=true
+            # Per spec: "A Receiver shall close the TCP/IP connection either instead of, or after sending 
+            # a Receiver_AuthStatus message with REAUTH_REQ set to true"
+            # But this is difficult to validate reliably from PCAP without TCP state tracking
+        
+        # 13.2.4: Null Topology Detection
+        # Per spec: "A Receiver unsubscribing from the HDCP Content of a Sender may choose to make its HKEP 
+        # session inactive at the Sender by sending an RepeaterAuth_Send_ReceiverID_List message with the 
+        # DEVICE_COUNT and DEPTH attributes set to 0 (Null Topology)"
+        receiverid_list_messages = [msg for msg in sorted(messages, key=lambda x: x.get('timestamp', 0))
+                                    if msg.get('hkep', {}).get('message_type') == 'RepeaterAuth_Send_ReceiverID_List']
+        
+        null_topology_detected = False
+        null_topology_packet = None
+        
+        for receiverid_msg in receiverid_list_messages:
+            hkep_data = receiverid_msg.get('hkep', {})
+            device_count = hkep_data.get('DEVICE_COUNT', -1)
+            depth = hkep_data.get('DEPTH', -1)
+            
+            # Detect Null Topology: DEVICE_COUNT=0 and DEPTH=0
+            if device_count == 0 and depth == 0:
+                null_topology_detected = True
+                null_topology_packet = receiverid_msg.get('packet_number')
+                
+                # Informational: Log that Null Topology was sent (session becoming inactive)
+                # This is not an error, but important for session lifecycle tracking
+                errors.append({
+                    'type': 'null_topology_detected',
+                    'severity': 'info',
+                    'description': f"RepeaterAuth_Send_ReceiverID_List (packet #{receiverid_msg.get('packet_number')}) contains Null Topology (DEVICE_COUNT=0, DEPTH=0). Receiver is making HKEP session inactive at Sender.",
+                    'packet_number': receiverid_msg.get('packet_number'),
+                    'timestamp': receiverid_msg.get('timestamp', 0),
+                    'expected': 'Null Topology indicates Receiver is unsubscribing from HDCP Content and making session inactive (per section 13.2.4)',
+                    'hkep_section': '13.2.4',
+                    'note': 'This is informational - session is transitioning to inactive state. Receiver will no longer be part of topology tree.'
+                })
+                
+                # Check if Sender acknowledges the Null Topology with Send_Ack (session becomes INACTIVE)
+                null_topology_timestamp = receiverid_msg.get('timestamp', 0)
+                send_ack_after_null = next((m for m in sorted(messages, key=lambda x: x.get('timestamp', 0))
+                                           if m.get('hkep', {}).get('message_type') == 'RepeaterAuth_Send_Ack' and
+                                              m.get('hkep', {}).get('direction') == 'Encoder->Decoder' and
+                                              m.get('timestamp', 0) > null_topology_timestamp), None)
+                
+                if send_ack_after_null:
+                    errors.append({
+                        'type': 'session_becomes_inactive',
+                        'severity': 'info',
+                        'description': f"HKEP session becomes INACTIVE at packet #{send_ack_after_null.get('packet_number')} (timestamp {send_ack_after_null.get('timestamp', 0):.6f}). Sender acknowledges Null Topology with RepeaterAuth_Send_Ack. Receiver is no longer in topology tree.",
+                        'packet_number': send_ack_after_null.get('packet_number'),
+                        'timestamp': send_ack_after_null.get('timestamp', 0),
+                        'expected': 'When Sender sends RepeaterAuth_Send_Ack after receiving Null Topology, it acknowledges that HKEP session is becoming inactive (per section 13.2.4)',
+                        'hkep_section': '13.2.4',
+                        'note': 'This Send_Ack acknowledges Null Topology - session is now INACTIVE, not valid'
+                    })
+        
+        # If Null Topology was detected, check if subsequent messages inappropriately send non-zero topology
+        # without full re-authentication (new AKE_PreInit with restart/REAUTH_REQ=true)
+        if null_topology_detected:
+            # Find messages after Null Topology
+            null_topology_msg_time = next((m.get('timestamp', 0) for m in receiverid_list_messages 
+                                          if m.get('packet_number') == null_topology_packet), 0)
+            
+            messages_after_null = [m for m in sorted(messages, key=lambda x: x.get('timestamp', 0))
+                                   if m.get('timestamp', 0) > null_topology_msg_time]
+            
+            # Check if there's a non-null topology sent without proper re-authentication
+            for msg in messages_after_null:
+                hkep_data = msg.get('hkep', {})
+                msg_type = hkep_data.get('message_type')
+                
+                # Check for non-Null topology after Null Topology
+                if msg_type == 'RepeaterAuth_Send_ReceiverID_List':
+                    device_count = hkep_data.get('DEVICE_COUNT', -1)
+                    depth = hkep_data.get('DEPTH', -1)
+                    
+                    # Non-zero topology after Null Topology
+                    if device_count > 0 or depth > 0:
+                        # Check if there was an AKE_PreInit with restart=true between null and this message
+                        ake_preinit_between = any(
+                            m.get('hkep', {}).get('message_type') == 'AKE_PreInit' and
+                            m.get('hkep', {}).get('restart/REAUTH_REQ') is True and
+                            null_topology_msg_time < m.get('timestamp', 0) < msg.get('timestamp', 0)
+                            for m in messages
+                        )
+                        
+                        if not ake_preinit_between:
+                            errors.append({
+                                'type': 'topology_after_null_without_reauth',
+                                'severity': 'warning',
+                                'description': f"RepeaterAuth_Send_ReceiverID_List (packet #{msg.get('packet_number')}) contains non-zero topology (DEVICE_COUNT={device_count}, DEPTH={depth}) after Null Topology (packet #{null_topology_packet}) without full re-authentication. Session was marked inactive.",
+                                'packet_number': msg.get('packet_number'),
+                                'timestamp': msg.get('timestamp', 0),
+                                'expected': 'After sending Null Topology (session inactive), Receiver should perform full re-authentication with AKE_PreInit restart/REAUTH_REQ=true before sending non-zero topology (per section 13.2.4)',
+                                'hkep_section': '13.2.4',
+                                'note': 'Receiver may be attempting to reactivate session after making it inactive'
+                            })
+        
+        # 13.2.2: Session Validity Timing
+        # Per spec: "The HKEP session becomes valid at the instant the HDCP RTP v2.3 session becomes valid"
+        # HDCP RTP v2.3 session becomes valid when:
+        # 1. Receiver receives SKE_Send_Eks (initial authentication), OR
+        # 2. Sender sends RepeaterAuth_Send_Ack (subsequent exchange after Receiver sent ReceiverID_List), OR
+        # 3. Receiver sends RepeaterAuth_Stream_Ready (subsequent exchange after Sender sent Stream_Manage)
+        
+        # Find when session becomes valid
+        session_valid_timestamp = None
+        session_valid_packet = None
+        session_valid_reason = None
+        
+        # Track Send_Ack packets that respond to Null Topology (these make session INACTIVE, not valid)
+        null_topology_ack_packets = set()
+        
+        sorted_msgs = sorted(messages, key=lambda x: x.get('timestamp', 0))
+        
+        # Check for SKE_Send_Eks (initial authentication - session becomes valid for Receiver)
+        ske_send_eks_msg = next((m for m in sorted_msgs 
+                                 if m.get('hkep', {}).get('message_type') == 'SKE_Send_Eks' and
+                                    m.get('hkep', {}).get('direction') == 'Encoder->Decoder'), None)
+        
+        if ske_send_eks_msg:
+            session_valid_timestamp = ske_send_eks_msg.get('timestamp', 0)
+            session_valid_packet = ske_send_eks_msg.get('packet_number')
+            session_valid_reason = "SKE_Send_Eks received by Receiver (initial authentication)"
+        
+        # Check for RepeaterAuth_Send_Ack (subsequent exchange - session becomes valid for both)
+        # IMPORTANT: Send_Ack after Null Topology does NOT make session valid - it acknowledges session becoming INACTIVE
+        # STEP 1: First pass - identify ALL null topology acks before setting session validity
+        send_ack_messages = [m for m in sorted_msgs 
+                             if m.get('hkep', {}).get('message_type') == 'RepeaterAuth_Send_Ack' and
+                                m.get('hkep', {}).get('direction') == 'Encoder->Decoder']
+        
+        # First pass: Identify all null topology acknowledgments
+        for send_ack_msg in send_ack_messages:
+            send_ack_timestamp = send_ack_msg.get('timestamp', 0)
+            send_ack_packet = send_ack_msg.get('packet_number')
+            
+            # Look for the ReceiverID_List that this Send_Ack is responding to
+            # Send_Ack responds to ReceiverID_List, not to other RepeaterAuth messages
+            receiverid_list_before_ack = [m for m in sorted_msgs 
+                                          if m.get('hkep', {}).get('message_type') == 'RepeaterAuth_Send_ReceiverID_List' and
+                                             m.get('timestamp', 0) < send_ack_timestamp]
+            
+            if receiverid_list_before_ack:
+                # Get the most recent ReceiverID_List before this Send_Ack
+                last_receiverid_list = max(receiverid_list_before_ack, key=lambda x: x.get('timestamp', 0))
+                last_msg_packet = last_receiverid_list.get('packet_number')
+                device_count = last_receiverid_list.get('hkep', {}).get('DEVICE_COUNT', -1)
+                depth = last_receiverid_list.get('hkep', {}).get('DEPTH', -1)
+                
+                # Check if it's Null Topology
+                if device_count == 0 and depth == 0:
+                    # This is a null topology ack - track it so we don't report it as "session becomes valid"
+                    null_topology_ack_packets.add(send_ack_packet)
+                    # Note: The "session becomes INACTIVE" message is already generated earlier in the function
+                    # (around line 2520) so we don't duplicate it here
+        
+        # Second pass: Find the most recent non-null-topology Send_Ack for session validity
+        for send_ack_msg in send_ack_messages:
+            send_ack_timestamp = send_ack_msg.get('timestamp', 0)
+            send_ack_packet = send_ack_msg.get('packet_number')
+            
+            # Skip if this is a null topology ack
+            if send_ack_packet in null_topology_ack_packets:
+                continue
+            
+            # Skip if we already have a more recent session validity timestamp
+            if session_valid_timestamp and send_ack_timestamp <= session_valid_timestamp:
+                continue
+            
+            # This is a normal Send_Ack - session becomes valid
+            # Double check it's not in null topology acks (should never happen due to continue above)
+            if send_ack_packet not in null_topology_ack_packets:
+                session_valid_timestamp = send_ack_timestamp
+                session_valid_packet = send_ack_packet
+                session_valid_reason = "RepeaterAuth_Send_Ack sent by Sender (subsequent exchange)"
+        
+        # Check for RepeaterAuth_Stream_Ready (subsequent exchange - session becomes valid for both)
+        stream_ready_msg = next((m for m in sorted_msgs 
+                                 if m.get('hkep', {}).get('message_type') == 'RepeaterAuth_Stream_Ready' and
+                                    m.get('hkep', {}).get('direction') == 'Decoder->Encoder'), None)
+        
+        if stream_ready_msg and (not session_valid_timestamp or stream_ready_msg.get('timestamp', 0) > session_valid_timestamp):
+            # Session becomes valid when Receiver sends Stream_Ready (or revalidated)
+            session_valid_timestamp = stream_ready_msg.get('timestamp', 0)
+            session_valid_packet = stream_ready_msg.get('packet_number')
+            session_valid_reason = "RepeaterAuth_Stream_Ready sent by Receiver (subsequent exchange)"
+        
+        # Log session validity information
+        # BUT: Skip if:
+        # 1. session_valid_packet is actually a Null Topology ack (session becoming INACTIVE, not valid)
+        # 2. There are any null topology acks at or after the session valid timestamp (those would make session inactive instead)
+        skip_session_valid_message = False
+        
+        if session_valid_timestamp and session_valid_packet:
+            # Check if the specific packet is a null topology ack
+            if session_valid_packet in null_topology_ack_packets:
+                skip_session_valid_message = True
+            
+            # Check if there are any null topology acks at or after this timestamp that would override it
+            for msg in sorted_msgs:
+                if (msg.get('packet_number') in null_topology_ack_packets and
+                    msg.get('timestamp', 0) >= session_valid_timestamp):
+                    skip_session_valid_message = True
+                    break
+        else:
+            skip_session_valid_message = True
+        
+        # FINAL CHECK: Absolutely do NOT output "session becomes valid" if this packet is a null topology ack
+        # Make absolutely sure session_valid_packet is set and is NOT a null topology ack
+        if (not skip_session_valid_message and 
+            session_valid_packet is not None and 
+            session_valid_packet not in null_topology_ack_packets):
+            
+            errors.append({
+                'type': 'session_validity_established',
+                'severity': 'info',
+                'description': f"HKEP session becomes valid at packet #{session_valid_packet} (timestamp {session_valid_timestamp:.6f}). Reason: {session_valid_reason}",
+                'packet_number': session_valid_packet,
+                'timestamp': session_valid_timestamp,
+                'expected': 'HKEP session becomes valid at the instant the HDCP RTP v2.3 session becomes valid (per section 13.2.2)',
+                'hkep_section': '13.2.2',
+                'note': session_valid_reason
+            })
+            
+            # Validate: Messages sent before session is valid should not include encrypted content
+            # This is implicit - we're just logging when session becomes valid for reference
+            # Future enhancement could check if any RTP packets are sent before this point
+        
+        # 13.2.3: Subsequent Exchange Sequence Validation
+        # Per TR-10-5 section 13.2.3, a subsequent exchange consists of one or more of these sequences:
+        # 1. Receiver sends ReceiverID_List → Sender responds with Send_Ack
+        # 2. Receiver sends Null → Sender responds with Null
+        # 3. Sender sends Stream_Manage → Receiver responds with Stream_Ready
+        # 4. Sender sends Null → Receiver responds with Null
+        #
+        # Multiple sequences can occur concurrently in the same exchange
+        # Each request MUST have its corresponding response
+        
+        # Only validate if this is a reconnect (subsequent exchange after initial authentication)
+        if is_reconnect:
+            # Collect all RepeaterAuth messages in chronological order
+            repeaterauth_msgs_ordered = sorted(
+                [m for m in messages if m.get('hkep', {}).get('message_type') in repeaterauth_messages],
+                key=lambda x: x.get('timestamp', 0)
+            )
+            
+            # Track pending requests that need responses
+            # Format: {message_type: (packet_number, timestamp)}
+            pending_sender_stream_manage = None
+            pending_receiver_receiverid_list = None
+            pending_sender_null = None
+            pending_receiver_null = None
+            
+            for msg in repeaterauth_msgs_ordered:
+                msg_type = msg.get('hkep', {}).get('message_type')
+                msg_dir = msg.get('hkep', {}).get('direction', '')
+                msg_pkt = msg.get('packet_number')
+                msg_ts = msg.get('timestamp', 0)
+                
+                # Sender messages (Encoder->Decoder)
+                if msg_dir == 'Encoder->Decoder':
+                    if msg_type == 'RepeaterAuth_Stream_Manage':
+                        # Sender sends Stream_Manage - expects Stream_Ready from Receiver
+                        if pending_sender_stream_manage:
+                            errors.append({
+                                'type': 'stream_manage_without_response',
+                                'severity': 'error',
+                                'description': f"Sender sent Stream_Manage (packet #{pending_sender_stream_manage[0]}) but sent another Stream_Manage (packet #{msg_pkt}) before receiving Stream_Ready response.",
+                                'packet_number': msg_pkt,
+                                'timestamp': msg_ts,
+                                'expected': 'Sender shall wait for Stream_Ready response before sending another Stream_Manage (per section 13.2.3)',
+                                'hkep_section': '13.2.3',
+                                'note': f'Previous Stream_Manage at packet #{pending_sender_stream_manage[0]} not yet responded'
+                            })
+                        pending_sender_stream_manage = (msg_pkt, msg_ts)
+                    
+                    elif msg_type == 'RepeaterAuth_Send_Ack':
+                        # Sender sends Send_Ack - this is response to Receiver's ReceiverID_List
+                        if not pending_receiver_receiverid_list:
+                            errors.append({
+                                'type': 'send_ack_without_receiverid_list',
+                                'severity': 'error',
+                                'description': f"Sender sent Send_Ack (packet #{msg_pkt}) without prior ReceiverID_List from Receiver.",
+                                'packet_number': msg_pkt,
+                                'timestamp': msg_ts,
+                                'expected': 'Send_Ack shall be sent in response to ReceiverID_List (per section 13.2.3)',
+                                'hkep_section': '13.2.3',
+                                'note': 'No pending ReceiverID_List found'
+                            })
+                        else:
+                            # Valid response - clear pending request
+                            pending_receiver_receiverid_list = None
+                    
+                    elif msg_type == 'Null message':
+                        # Sender sends Null - may be independent or response to Receiver Null
+                        if pending_receiver_null:
+                            # This is response to Receiver's Null
+                            pending_receiver_null = None
+                        else:
+                            # This is independent Sender Null - expects Receiver Null response
+                            pending_sender_null = (msg_pkt, msg_ts)
+                    
+                    else:
+                        # Invalid message type in subsequent exchange
+                        errors.append({
+                            'type': 'invalid_sender_message_subsequent_exchange',
+                            'severity': 'error',
+                            'description': f"Sender sent invalid message '{msg_type}' (packet #{msg_pkt}) in subsequent exchange. Valid: Null, Stream_Manage, Send_Ack.",
+                            'packet_number': msg_pkt,
+                            'timestamp': msg_ts,
+                            'expected': 'In subsequent exchange, Sender may send: Null, Stream_Manage, or Send_Ack (per section 13.2.3)',
+                            'hkep_section': '13.2.3',
+                            'note': f'Invalid message type: {msg_type}'
+                        })
+                
+                # Receiver messages (Decoder->Encoder)
+                elif msg_dir == 'Decoder->Encoder':
+                    if msg_type == 'RepeaterAuth_Send_ReceiverID_List':
+                        # Receiver sends ReceiverID_List - expects Send_Ack from Sender
+                        if pending_receiver_receiverid_list:
+                            errors.append({
+                                'type': 'receiverid_list_without_response',
+                                'severity': 'error',
+                                'description': f"Receiver sent ReceiverID_List (packet #{pending_receiver_receiverid_list[0]}) but sent another ReceiverID_List (packet #{msg_pkt}) before receiving Send_Ack response.",
+                                'packet_number': msg_pkt,
+                                'timestamp': msg_ts,
+                                'expected': 'Receiver shall wait for Send_Ack response before sending another ReceiverID_List (per section 13.2.3)',
+                                'hkep_section': '13.2.3',
+                                'note': f'Previous ReceiverID_List at packet #{pending_receiver_receiverid_list[0]} not yet responded'
+                            })
+                        pending_receiver_receiverid_list = (msg_pkt, msg_ts)
+                    
+                    elif msg_type == 'RepeaterAuth_Stream_Ready':
+                        # Receiver sends Stream_Ready - this is response to Sender's Stream_Manage
+                        if not pending_sender_stream_manage:
+                            errors.append({
+                                'type': 'stream_ready_without_stream_manage',
+                                'severity': 'error',
+                                'description': f"Receiver sent Stream_Ready (packet #{msg_pkt}) without prior Stream_Manage from Sender.",
+                                'packet_number': msg_pkt,
+                                'timestamp': msg_ts,
+                                'expected': 'Stream_Ready shall be sent in response to Stream_Manage (per section 13.2.3)',
+                                'hkep_section': '13.2.3',
+                                'note': 'No pending Stream_Manage found'
+                            })
+                        else:
+                            # Valid response - clear pending request
+                            pending_sender_stream_manage = None
+                    
+                    elif msg_type == 'Null message':
+                        # Receiver sends Null - may be independent or response to Sender Null
+                        if pending_sender_null:
+                            # This is response to Sender's Null
+                            pending_sender_null = None
+                        else:
+                            # This is independent Receiver Null - expects Sender Null response
+                            pending_receiver_null = (msg_pkt, msg_ts)
+                    
+                    else:
+                        # Invalid message type in subsequent exchange
+                        errors.append({
+                            'type': 'invalid_receiver_message_subsequent_exchange',
+                            'severity': 'error',
+                            'description': f"Receiver sent invalid message '{msg_type}' (packet #{msg_pkt}) in subsequent exchange. Valid: Null, ReceiverID_List, Stream_Ready.",
+                            'packet_number': msg_pkt,
+                            'timestamp': msg_ts,
+                            'expected': 'In subsequent exchange, Receiver may send: Null, ReceiverID_List, or Stream_Ready (per section 13.2.3)',
+                            'hkep_section': '13.2.3',
+                            'note': f'Invalid message type: {msg_type}'
+                        })
+            
+            # Check for pending requests without responses at end of exchange
+            if pending_sender_stream_manage:
+                errors.append({
+                    'type': 'missing_stream_ready_response',
+                    'severity': 'warning',
+                    'description': f"Sender sent Stream_Manage (packet #{pending_sender_stream_manage[0]}) but did not receive Stream_Ready response.",
+                    'packet_number': pending_sender_stream_manage[0],
+                    'timestamp': pending_sender_stream_manage[1],
+                    'expected': 'Receiver shall respond to Stream_Manage with Stream_Ready (per section 13.2.3)',
+                    'hkep_section': '13.2.3',
+                    'note': 'Stream_Ready response missing or not captured'
+                })
+            
+            if pending_receiver_receiverid_list:
+                errors.append({
+                    'type': 'missing_send_ack_response',
+                    'severity': 'warning',
+                    'description': f"Receiver sent ReceiverID_List (packet #{pending_receiver_receiverid_list[0]}) but did not receive Send_Ack response.",
+                    'packet_number': pending_receiver_receiverid_list[0],
+                    'timestamp': pending_receiver_receiverid_list[1],
+                    'expected': 'Sender shall respond to ReceiverID_List with Send_Ack (per section 13.2.3)',
+                    'hkep_section': '13.2.3',
+                    'note': 'Send_Ack response missing or not captured'
+                })
+        
         return errors
     
     def validate_section_12_6(self, exchange: HKEPExchange) -> List[Dict]:
@@ -2461,18 +3093,76 @@ class HKEPDissector:
                 'hkep_section': '12.6'
             })
         
+        # 12.4.1: Protocol Version Matching
+        # Per spec: "Both the client and server sides of a TCP/IP connection shall use the same HKEP protocol version"
+        if preinit_msg and preinitstatus_msg:
+            preinit_version = preinit_msg.get('hkep', {}).get('Version', 0)
+            preinitstatus_version = preinitstatus_msg.get('hkep', {}).get('Version', 0)
+            status = preinitstatus_msg.get('hkep', {}).get('status')
+            
+            # If status is NOT statusInvalidParameters, versions MUST match
+            if status != 1:  # Not statusInvalidParameters
+                if preinit_version != preinitstatus_version:
+                    errors.append({
+                        'type': 'version_mismatch',
+                        'severity': 'error',
+                        'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) has version 0x{preinit_version:02x}, but AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has version 0x{preinitstatus_version:02x}. Both sides shall use the same protocol version.",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'Both client and server sides of TCP/IP connection shall use the same HKEP protocol version. Server shall match client version in AKE_PreInitStatus response (per section 12.4.1)',
+                        'hkep_section': '12.4.1'
+                    })
+            # If status IS statusInvalidParameters, PreInitStatus version indicates server's highest supported version
+            # This is informational, not an error
+        
+        # 12.5: Vendor Extension Echo Behavior
+        # Per spec: "A Sender should copy the value of the vendorExtension attribute from an AKE_PreInit message 
+        # into the vendorExtension attribute of the AKE_PreInitStatus message response"
+        if preinit_msg and preinitstatus_msg:
+            preinit_vendor_ext = preinit_msg.get('hkep', {}).get('vendorExtension', '')
+            preinitstatus_vendor_ext = preinitstatus_msg.get('hkep', {}).get('vendorExtension', '')
+            
+            # Only check if vendorExtension is non-zero in PreInit
+            if preinit_vendor_ext and preinit_vendor_ext != '00000000000000000000000000000000':
+                if preinit_vendor_ext != preinitstatus_vendor_ext:
+                    errors.append({
+                        'type': 'vendor_extension_not_echoed',
+                        'severity': 'warning',
+                        'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) has vendorExtension={preinit_vendor_ext[:16]}..., but AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has different vendorExtension={preinitstatus_vendor_ext[:16]}... Sender should copy vendorExtension from PreInit to PreInitStatus for cross-vendor interoperability.",
+                        'packet_number': preinitstatus_msg.get('packet_number'),
+                        'timestamp': preinitstatus_msg.get('timestamp', 0),
+                        'expected': 'Sender should copy vendorExtension from AKE_PreInit to AKE_PreInitStatus response (per section 12.5 - recommended cross-vendor behavior)',
+                        'hkep_section': '12.5',
+                        'note': 'Same-vendor implementations may intentionally use different vendorExtension values'
+                    })
+        
         if preinitstatus_msg:
             status = preinitstatus_msg.get('hkep', {}).get('status')
             status_text = preinitstatus_msg.get('hkep', {}).get('status_text', 'Unknown')
             
-            # 12.6.1 and 12.6.2: Validate status handling
+            # 12.6.1 and 12.6.2: TCP Connection Closure After statusInvalidParameters
+            # Per spec: "If the attributes of an AKE_PreInit message are invalid, the Sender shall respond 
+            # with an AKE_PreInitStatus message with status set to statusInvalidParameters and the connection 
+            # shall be closed"
             if status == 1:  # statusInvalidParameters
-                # Connection should be closed - check if there are messages after PreInitStatus
-                messages_after = [m for m in sorted_messages if m.get('timestamp', 0) > preinitstatus_msg.get('timestamp', 0)]
+                # Connection SHALL be closed - check if there are HKEP messages after PreInitStatus
+                messages_after = [m for m in sorted_messages 
+                                 if m.get('timestamp', 0) > preinitstatus_msg.get('timestamp', 0) and
+                                    m.get('hkep', {}).get('message_type') not in [None, '']]
+                
                 if messages_after:
-                    # Check if connection was closed (FIN or RST)
-                    # This is harder to validate from just messages, so we'll just note it
-                    pass
+                    # There are HKEP messages after statusInvalidParameters - this violates the spec
+                    first_msg_after = messages_after[0]
+                    errors.append({
+                        'type': 'messages_after_invalid_parameters',
+                        'severity': 'error',
+                        'description': f"AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has status statusInvalidParameters, but HKEP message '{first_msg_after.get('hkep', {}).get('message_type')}' (packet #{first_msg_after.get('packet_number')}) was sent after. Connection shall be closed after statusInvalidParameters.",
+                        'packet_number': first_msg_after.get('packet_number'),
+                        'timestamp': first_msg_after.get('timestamp', 0),
+                        'expected': 'When AKE_PreInitStatus.status is statusInvalidParameters, connection shall be closed immediately. No further HKEP messages shall be sent (per sections 12.6.1 and 12.6.2)',
+                        'hkep_section': '12.6.1, 12.6.2',
+                        'note': f'Connection should close after packet #{preinitstatus_msg.get("packet_number")}, but packet #{first_msg_after.get("packet_number")} was sent'
+                    })
             
             # 12.6.1: With explicit pairing (pairing=true)
             if pairing_flag is True:
@@ -2830,6 +3520,60 @@ class HKEPDissector:
                         'note': 'If sessionSlots is 0, no HKEP session can be established, which defeats the purpose of the protocol'
                     })
         
+        # 12.7: AKE_Send_Pairing_Info Sequence and Connection Closure
+        # Per spec: "After the HDCP protocol pairing, the Sender shall send an AKE_Send_Pairing_Info 
+        # message to the Receiver and close the TCP/IP connection. The Receiver waits for the 
+        # AKE_Send_Pairing_Info message and closes the TCP/IP connection after receiving it."
+        
+        # Look for HDCP pairing completion indicators (this happens in non-receiver protocol with pairing=true)
+        # The pairing sequence is: AKE_Init → ... → AKE_Send_Pairing_Info → connection closes
+        ake_send_pairing_info_msg = next((m for m in sorted_messages 
+                                          if m.get('hkep', {}).get('message_type') == 'AKE_Send_Pairing_Info'), None)
+        
+        if ake_send_pairing_info_msg:
+            # AKE_Send_Pairing_Info was sent - connection SHALL be closed after this
+            messages_after_pairing = [m for m in sorted_messages 
+                                     if m.get('timestamp', 0) > ake_send_pairing_info_msg.get('timestamp', 0) and
+                                        m.get('hkep', {}).get('message_type') not in [None, '']]
+            
+            if messages_after_pairing:
+                first_msg_after = messages_after_pairing[0]
+                errors.append({
+                    'type': 'messages_after_pairing_info',
+                    'severity': 'error',
+                    'description': f"AKE_Send_Pairing_Info (packet #{ake_send_pairing_info_msg.get('packet_number')}) was sent, but HKEP message '{first_msg_after.get('hkep', {}).get('message_type')}' (packet #{first_msg_after.get('packet_number')}) was sent after. Connection shall be closed after AKE_Send_Pairing_Info.",
+                    'packet_number': first_msg_after.get('packet_number'),
+                    'timestamp': first_msg_after.get('timestamp', 0),
+                    'expected': 'After AKE_Send_Pairing_Info message, Sender shall close TCP/IP connection. No further HKEP messages shall be sent (per section 12.7)',
+                    'hkep_section': '12.7',
+                    'note': f'Connection should close after packet #{ake_send_pairing_info_msg.get("packet_number")}, but packet #{first_msg_after.get("packet_number")} was sent'
+                })
+        
+        # Check if pairing was initiated but AKE_Send_Pairing_Info is missing
+        # This would be detected if we see AKE_Init (start of HDCP pairing) but no AKE_Send_Pairing_Info
+        if preinit_msg and preinitstatus_msg:
+            status = preinitstatus_msg.get('hkep', {}).get('status')
+            pairing_flag = preinit_msg.get('hkep', {}).get('pairing')
+            
+            # If status is statusOk and pairing was true, we expect to see HDCP pairing
+            if status == 0 and pairing_flag:  # statusOk
+                # Look for AKE_Init (start of HDCP pairing)
+                ake_init_msg = next((m for m in sorted_messages 
+                                    if m.get('hkep', {}).get('message_type') == 'AKE_Init'), None)
+                
+                if ake_init_msg and not ake_send_pairing_info_msg:
+                    # HDCP pairing started but didn't complete with AKE_Send_Pairing_Info
+                    errors.append({
+                        'type': 'missing_pairing_info',
+                        'severity': 'warning',
+                        'description': f"HDCP pairing started with AKE_Init (packet #{ake_init_msg.get('packet_number')}) but AKE_Send_Pairing_Info message is missing. After pairing, Sender shall send AKE_Send_Pairing_Info.",
+                        'packet_number': ake_init_msg.get('packet_number'),
+                        'timestamp': ake_init_msg.get('timestamp', 0),
+                        'expected': 'After HDCP protocol pairing completes, Sender shall send AKE_Send_Pairing_Info message (per section 12.7)',
+                        'hkep_section': '12.7',
+                        'note': 'Pairing may have failed, or capture may be incomplete'
+                    })
+        
         return errors
     
     def validate_section_13_1(self, exchange: HKEPExchange) -> List[Dict]:
@@ -3097,13 +3841,26 @@ class HKEPDissector:
         errors = []
         
         # Group exchanges by session tuple to analyze session lifecycle
-        sessions = {}  # session_key -> list of exchanges (in chronological order)
+        # Note: session_key might have suffixes like "_1", "_2" due to reconnection attempts
+        # We need to normalize by removing the suffix to group all attempts together
+        sessions = {}  # base_session_key -> list of exchanges (in chronological order)
         
         for exchange in analysis_result.get_all_exchanges():
+            # Skip incomplete exchanges - can't validate session caching without proper initial sequence
+            if hasattr(exchange, 'is_complete') and not exchange.is_complete:
+                continue
+            
             session_key = exchange.session_key
-            if session_key not in sessions:
-                sessions[session_key] = []
-            sessions[session_key].append(exchange)
+            # Remove suffix if present (format: "..._<number>")
+            base_session_key = session_key
+            if '_' in session_key:
+                parts = session_key.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    base_session_key = parts[0]
+            
+            if base_session_key not in sessions:
+                sessions[base_session_key] = []
+            sessions[base_session_key].append(exchange)
         
         # Sort exchanges within each session by start time
         for session_key in sessions:
@@ -3324,7 +4081,8 @@ class HKEPDissector:
         if has_violations:
             error_count = sum(1 for v in violations if v.get('severity') == 'error')
             warning_count = sum(1 for v in violations if v.get('severity') == 'warning')
-            violation_marker = f" [VIOLATION: {error_count} error(s), {warning_count} warning(s)]"
+            info_count = sum(1 for v in violations if v.get('severity') == 'info')
+            violation_marker = f" [VIOLATION: {error_count} error(s), {warning_count} warning(s), {info_count} info]"
             print(f"Packet #{packet_num} (HKEP #{result['hkep_packet_number']}){violation_marker}")
         else:
             print(f"Packet #{packet_num} (HKEP #{result['hkep_packet_number']})")
@@ -3341,7 +4099,12 @@ class HKEPDissector:
         if has_violations:
             print(f"\n  *** SECTION 13.2 VALIDATION VIOLATIONS ***")
             for violation in violations:
-                severity_marker = "[ERROR]" if violation.get('severity') == 'error' else "[WARNING]"
+                if violation.get('severity') == 'error':
+                    severity_marker = "[ERROR]"
+                elif violation.get('severity') == 'warning':
+                    severity_marker = "[WARNING]"
+                else:  # info
+                    severity_marker = "[INFO]"
                 print(f"    {severity_marker} {violation.get('description', 'Unknown violation')}")
                 print(f"      Expected: {violation.get('expected', 'N/A')}")
                 if violation.get('note'):
@@ -3532,6 +4295,8 @@ The --validate-session-caching option validates session caching consistency:
                     'successful': exchange.is_successful(),
                     'disconnection_reason': exchange.disconnection_reason,
                     'is_reconnect': is_reconnect,
+                    'is_complete': exchange.is_complete if exchange.is_complete is not None else True,
+                    'incomplete_reason': exchange.incomplete_reason,
                     'messages': exchange.get_messages()
                 }
                 output_data['exchanges'].append(exchange_data)
