@@ -21,3 +21,4 @@ flask-socketio
 pycryptodome
 xeger
 pyshark
+scapy
