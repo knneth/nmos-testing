@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-HKEP (HDCP Key Exchange Protocol) Dissector for PCAP files
-Converted from Lua Wireshark dissector by Ryosuke Yamamoto
+HKEP (HDCP Key Exchange Protocol) Dissector/Analyzer for PCAP files
 
 Copyright (c) 2024, Matrox Graphics Inc. All rights reserved.
 
@@ -29,6 +28,9 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Credits: Parsing of HDCP messages has initially been derived from the HKEP
+         Wireshark Lua dissector written by Ryosuke Yamamoto.
 """
 
 import struct
@@ -4455,7 +4457,9 @@ The --validate-session-caching option validates session caching consistency:
 
 def example_programmatic_usage():
     """
-    Example of how to programmatically analyze HKEP exchanges
+    Example of how to programmatically analyze HKEP exchanges. An external program may use this API to analyze HKEP exchanges
+    without the need to use the command line interface. It may be used to analyze protocol issues or search for specific 
+    exchanges or message sequences.
     """
     dissector = HKEPDissector()
 
