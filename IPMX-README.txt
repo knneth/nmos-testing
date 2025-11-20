@@ -117,4 +117,8 @@ Check IPMX_VENDOR_XYZ for the resulting files.
     Additional Setup:
     - Install Lua dissector for IPMX RTCP Sender Reports
 
+- IS-11 test results
+
+There are new batch files for the analysis of the IS-11 test results targeting specific environments. The examples provided are IPMX-CHECK-HDMI-IS11s.bat and IPMX-CHECK-HDMI-IS11r.bat. Additional ones can be created for SDI and for scenarios without Input or Outputs.
+
 - This IPMX testing environment is a work-in-progress. Your bug reports and suggestions to make it better are welcome.
