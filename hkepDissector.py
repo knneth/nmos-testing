@@ -582,7 +582,7 @@ class HKEPDissector:
     def dissect_receiver_authstatus(self, data: bytes, msg_size: int) -> Dict:
         """Dissect msg_id 18: Receiver_AuthStatus (Decoder->Encoder)"""
         length = struct.unpack('>H', data[3:5])[0]
-        reauth_req = data[4] == 1
+        reauth_req = data[5] == 1
         return {
             "message_type": "Receiver_AuthStatus",
             "direction": "Decoder->Encoder",
