@@ -393,6 +393,10 @@ def _get_ipmx_fields(pkt) -> Dict[str, str]:
         "ptp_time_msw":         "ptp_time_msw",   # seconds
         "ptp_time_lsw":         "ptp_time_lsw",   # nanoseconds
     }
+    # Block version (if present)
+    block_ver = _get_text(ipmx, "block_version") or _get_text(ipmx, "info_block_version") or _get_text(ipmx, "version")
+    if block_ver not in (None, ""):
+        out["block_version"] = block_ver
     for canon, field in mapping_common.items():
         val = _get_text(ipmx, field)
         if val not in (None, ""):
@@ -742,6 +746,9 @@ def stream_sr_vs_first_rtp(pcap_file: str, sdp_path: Optional[str] = None) -> No
                     print(sdp_matches_line)
                 for line in sdp_mismatches_lines:
                     print(line)
+                # Print Block Version if present
+                bv = ipmx_fields.get("block_version")
+                print(f"(TP10-1, sec 13.3 InfoBlock) Block Version: {bv}")
                 return
 
             # Detect first RTCP Sender Report (PT=200)
