@@ -68,6 +68,8 @@ class IS0403Test(GenericTest):
                     if address != api["ip"]:
                         continue
                     properties = self.convert_bytes(node.properties)
+                    print(f"Found NODE: {address}:{port}")
+                    print(f"   +----> Properties: {properties}")
                     break
                 if properties:
                     break

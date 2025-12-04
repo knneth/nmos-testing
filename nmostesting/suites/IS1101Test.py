@@ -519,13 +519,13 @@ class IS1101Test(GenericTest):
         if (numerator == 30 or numerator == 25) and denominator == 1:
             return {"numerator": numerator * 2, "denominator": 1}
         if (numerator == 60 or numerator == 50) and denominator == 1:
-            return {"numerator": numerator / 2, "denominator": 1}
+            return {"numerator": int(numerator / 2), "denominator": 1}
         if numerator == 24 and denominator == 1:
             return {"numerator": 30, "denominator": 1}
         if (numerator == 30000 or numerator == 25000) and denominator == 1001:
             return {"numerator": numerator * 2, "denominator": 1001}
         if (numerator == 60000 or numerator == 50000) and denominator == 1001:
-            return {"numerator": numerator / 2, "denominator": 1001}
+            return {"numerator": int(numerator / 2), "denominator": 1001}
         return "grain_rate not valid"
 
     def get_another_sample_rate(self, sample_rate):
@@ -2312,7 +2312,10 @@ class IS1101Test(GenericTest):
                         )
                     )
                 if response.status_code == 422:
+                    do_not_accept_constraint = True
                     print("Device does not accept grain_rate constraint")
+                else:
+                    do_not_accept_constraint = False
 
                 valid, response = self.do_request(
                     "GET",
@@ -2435,10 +2438,8 @@ class IS1101Test(GenericTest):
                 except KeyError as e:
                     return test.FAIL("Unable to find expected key: {}".format(e))
 
-                if state == "active_constraints_violation":
-                    return test.UNCLEAR("This device can not constraint grain_rate")
-
-                if state in ["awaiting_essence", "no_essence"]:
+                # active constraints violation may be temporary as the source changes its essence
+                if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                     for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
                         valid, response = self.do_request(
                             "GET", self.build_sender_status_url(sender_id)
@@ -2458,10 +2459,17 @@ class IS1101Test(GenericTest):
                         except KeyError as e:
                             return test.FAIL("Unable to find expected key: {}".format(e))
 
-                        if state in ["awaiting_essence", "no_essence"]:
+                        if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                             time.sleep(CONFIG.STABLE_STATE_DELAY)
                         else:
                             break
+
+                        print("State: {}".format(state))
+
+                # Must come after awaiting_essence and no_essence loop
+                if state == "active_constraints_violation" or do_not_accept_constraint:
+                    return test.UNCLEAR("This device can not constraint grain_rate")
+
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""
                                      .format(sender_id, state))
@@ -2478,7 +2486,7 @@ class IS1101Test(GenericTest):
                 if response.status_code != 200:
                     return test.FAIL(
                         "The streamcompatibility request for sender {} status has failed: {}".format(
-                            sender_id, response
+                            sender_id, response.json()
                         )
                     )
 
@@ -2661,7 +2669,10 @@ class IS1101Test(GenericTest):
                         )
                     )
                 if response.status_code == 422:
+                    do_not_accept_constraint = True
                     print("Device does not accept grain_rate constraint")
+                else:
+                    do_not_accept_constraint = False
 
                 valid, response = self.do_request(
                     "GET",
@@ -2783,10 +2794,8 @@ class IS1101Test(GenericTest):
                 except KeyError as e:
                     return test.FAIL("Unable to find expected key: {}".format(e))
 
-                if state == "active_constraints_violation":
-                    return test.UNCLEAR("This device can not constraint sample_rate")
-
-                if state in ["awaiting_essence", "no_essence"]:
+                # active constraints violation may be temporary as the source changes its essence
+                if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                     for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
                         valid, response = self.do_request(
                             "GET", self.build_sender_status_url(sender_id)
@@ -2806,10 +2815,17 @@ class IS1101Test(GenericTest):
                         except KeyError as e:
                             return test.FAIL("Unable to find expected key: {}".format(e))
 
-                        if state in ["awaiting_essence", "no_essence"]:
+                        if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                             time.sleep(CONFIG.STABLE_STATE_DELAY)
                         else:
                             break
+                        
+                        print("State: {}".format(state))
+
+                # Must come after awaiting_essence and no_essence loop
+                if state == "active_constraints_violation" or do_not_accept_constraint:
+                    return test.UNCLEAR("This device can not constraint sample_rate")
+
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""
                                      .format(sender_id, state))
