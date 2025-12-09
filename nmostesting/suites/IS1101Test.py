@@ -2282,14 +2282,16 @@ class IS1101Test(GenericTest):
 
                 default_edid = self.get_effective_edid(test, input_id)
 
+                another_refresh_rate = self.get_another_grain_rate(
+                                        self.flow_grain_rate[sender_id]
+                                    )
+                
                 self.another_grain_rate_constraints[sender_id] = {
                     "constraint_sets": [
                         {
                             "urn:x-nmos:cap:format:grain_rate": {
                                 "enum": [
-                                    self.get_another_grain_rate(
-                                        self.flow_grain_rate[sender_id]
-                                    )
+                                    another_refresh_rate
                                 ]
                             }
                         }
@@ -2466,6 +2468,10 @@ class IS1101Test(GenericTest):
 
                         print("State: {}".format(state))
 
+                if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                    print(f"CHECK THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate}")
+                    input("Press Enter to continue...")
+
                 # Must come after awaiting_essence and no_essence loop
                 if state == "active_constraints_violation" or do_not_accept_constraint:
                     return test.UNCLEAR("This device can not constraint grain_rate")
@@ -2639,14 +2645,16 @@ class IS1101Test(GenericTest):
 
                 default_edid = self.get_effective_edid(test, input_id)
 
+                another_sample_rate = self.get_another_sample_rate(
+                                        self.flow_sample_rate[sender_id]
+                                    )
+                
                 self.another_sample_rate_constraints[sender_id] = {
                     "constraint_sets": [
                         {
                             "urn:x-nmos:cap:format:sample_rate": {
                                 "enum": [
-                                    self.get_another_sample_rate(
-                                        self.flow_sample_rate[sender_id]
-                                    )
+                                    another_sample_rate
                                 ]
                             }
                         }
@@ -2821,6 +2829,10 @@ class IS1101Test(GenericTest):
                             break
                         
                         print("State: {}".format(state))
+
+                if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                    print(f"CHECK THE SOURCE EDID for a preferred sample rate of {another_sample_rate}")
+                    input("Press Enter to continue...")
 
                 # Must come after awaiting_essence and no_essence loop
                 if state == "active_constraints_violation" or do_not_accept_constraint:
