@@ -209,10 +209,14 @@ class SDPValidationScript:
         elif media_type == "video/h265":
             validations.extend([
                 ('RFC 7798 (video/H265)', check_sdp_rfc7798),
+                ('ST 2110-10', check_sdp_st2110_10),
+                ('ST 2110-22', check_sdp_st2110_22),
             ])
         elif media_type == "video/h264":
             validations.extend([
                 ('RFC 6184 (video/H264)', check_sdp_rfc6184),
+                ('ST 2110-10', check_sdp_st2110_10),
+                ('ST 2110-22', check_sdp_st2110_22),
             ])
         elif media_type in ("audio/l8", "audio/l16", "audio/l20", "audio/l24"):
             validations.extend([

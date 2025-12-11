@@ -516,12 +516,27 @@ class IpmxSdpTest(GenericTest):
                         check_sdp_rfc7798(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 7798 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_10(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_22(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
                 elif flow["media_type"] == "video/H264":
                     try:
                         check_sdp_rfc6184(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 6184 check: {}".format(sender["id"], e.message))
-
+                    try:
+                        check_sdp_st2110_10(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_22(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
                 else:
                     return test.FAIL("Sender {} Flow {} has an unexpected media type {}"
                                      .format(sender["id"], flow["id"], flow["media_type"]))
