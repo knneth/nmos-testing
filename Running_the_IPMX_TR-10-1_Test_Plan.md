@@ -34,7 +34,7 @@ If testing a Sender
 
 A DuT may be tested against a video Profile and an audio Profile simultaneously or in sequence. In this document we use as an example the testing of a device against both a video Profile (uncompressed or JPEG XS) and an audio Profile (PCM or AM824). As such the `ipmx-test-senders.guid` file contains the GUID of the video Sender of the DuT and the GUID of the audio Sender of the DuT. The `ipmx-test-receivers.guid` file contains the GUID of the video Receiver of the DuT and the GUID of the audio Receiver of the DuT.
 
-Once selected, the GUIDs of the Senders and Receivers of the DuT cannot be changed as they are required to be persisted during the whole test sequence.
+Once selected, the GUIDs of the Senders and Receivers of the DuT cannot be changed as they are required to be persisted during the whole test sequence. When the same DuT is tested both as a Sender and as a Receiver role in sequence (not simultaneously), the GUID of a role can be captured when the testing of such role starts and then cannot be changed.
 
 ## Test Execution Workflow
 
