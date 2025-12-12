@@ -3605,6 +3605,25 @@ class IS1101Test(GenericTest):
                     return test.FAIL(response)
 
                 state = response["state"]
+
+                if state in ["awaiting_essence", "no_essence"]:
+                    for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
+                        valid, response = self.do_request(
+                            "GET", self.build_sender_status_url(senderId)
+                        )
+                        if not valid:
+                            return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+                        if response.status_code != 200:
+                            return test.FAIL(
+                                "The streamcompatibility request for sender {} status has failed: {}"
+                                .format(senderId, response.json())
+                            )
+                        state = response.json()["state"]
+                        if state in ["awaiting_essence", "no_essence"]:
+                            time.sleep(CONFIG.STABLE_STATE_DELAY)
+                        else:
+                            break
+
                 state_expected = "unconstrained"
                 if state != state_expected:
                     if state == self.state_awaiting_essence or state == self.state_no_essence:
@@ -3650,6 +3669,25 @@ class IS1101Test(GenericTest):
                     return test.FAIL(response)
 
                 state = response["state"]
+
+                if state in ["awaiting_essence", "no_essence"]:
+                    for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
+                        valid, response = self.do_request(
+                            "GET", self.build_sender_status_url(senderId)
+                        )
+                        if not valid:
+                            return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+                        if response.status_code != 200:
+                            return test.FAIL(
+                                "The streamcompatibility request for sender {} status has failed: {}"
+                                .format(senderId, response.json())
+                            )
+                        state = response.json()["state"]
+                        if state in ["awaiting_essence", "no_essence"]:
+                            time.sleep(CONFIG.STABLE_STATE_DELAY)
+                        else:
+                            break
+
                 state_expected = "unconstrained"
                 if state != state_expected:
                     if state == self.state_awaiting_essence or state == self.state_no_essence:
