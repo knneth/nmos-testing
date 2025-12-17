@@ -2295,8 +2295,12 @@ class HKEPDissector:
                         severity_marker = "[WARNING]"
                     else:  # info
                         severity_marker = "[INFO]"
+
+                    ts = error.get("timestamp")
+                    ts_str = f"{ts:.6f}" if ts is not None else "N/A"
+
                     print(f"    {severity_marker} {error['description']}")
-                    print(f"      Packet: #{error['packet_number']}, Timestamp: {error['timestamp']:.6f}")
+                    print(f"      Packet: #{error.get('packet_number','?')}, Timestamp: {ts_str}")
                     print(f"      Expected: {error['expected']}")
                     print(f"      HKEP Section: {error['hkep_section']}")
                     if error.get('note'):
