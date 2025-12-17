@@ -850,8 +850,6 @@ class IpmxSdpTest(GenericTest):
 
         self.test = test
 
-        REGISTRY_TIMEOUT = 10  # seconds
-
         valid, result = self.get_is04_resources("self")
         if not valid:
             return test.FAIL(result)
@@ -863,66 +861,25 @@ class IpmxSdpTest(GenericTest):
         device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
         node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
 
-        node = next(iter(node_map.values()))
         node_id = next(iter(node_map.keys()))
-
+        node = self._get_node_from_registry(node_id)
+        if node is None:
+            return test.FAIL("Node {} Could not find the Node in the registry"
+                                .format(node_id))        
         try:
 
-            # Register to get resource updated for devices
-            sub_json = self.prepare_subscription("/devices")
-            resp_json = self.post_subscription(test, sub_json)
-            websocket = WebsocketWorker(resp_json["ws_href"])
+            found_devices = list()
 
-            websocket.start()
+            for device_id in device_map.keys():
+                device = self._get_device_from_registry(device_id)
+                if device is not None:
+                    found_devices.append(device_id)
 
-            sleep(CONFIG.WS_MESSAGE_TIMEOUT)
-
-            found_devices_time_start = time.monotonic()
-
-            while True:
-
-                sleep(0.5)
-
-                if time.monotonic() - found_devices_time_start > REGISTRY_TIMEOUT:
-                    return test.FAIL("Node {} Could not find the Node's devices {} in the registry prior to a timeout"
-                                     " of {} seconds".format(node_id, list(device_map.keys()), REGISTRY_TIMEOUT))
-
-                if websocket.did_error_occur():
-                    return test.FAIL("Node {} Error opening websocket: {}".format(node_id,
-                                                                                  websocket.get_error_message()))
-
-                received_messages = websocket.get_messages()
-
-                # Verify data inside messages
-                grain_data = list()
-
-                for curr_msg in received_messages:
-                    json_msg = json.loads(curr_msg)
-                    grain_data.extend(json_msg["grain"]["data"])
-
-                found_devices = list()
-
-                for curr_data in grain_data:
-
-                    # case has Pre && has Post:
-                    # => CREATE / UPDATE
-                    # case has Pre == nil && not has Post:
-                    # => DELETE
-                    # case not has Pre && has Post:
-                    # => CREATE
-                    # case not haas Pre != nil && not has Post:
-                    # => NOP
-                    if "pre" not in curr_data or "post" not in curr_data:
-                        continue
-
-                    if curr_data['path'] in device_map.keys():
-                        found_devices.append(curr_data['path'])
-                        break
-
-                if all(key in found_devices for key in device_map.keys()):
-                    break
-
-            # Now for each device check the NOs API implemented and their version
+            if not all(key in found_devices for key in device_map.keys()):
+                return test.FAIL("Node {} Could not find the Node's devices {} in the registry"
+                                    .format(node_id, list(device_map.keys())))
+            
+            # Now for each device check the NMOS API implemented and their version
             found_is04 = False
             found_is05 = False
             found_is11 = False
