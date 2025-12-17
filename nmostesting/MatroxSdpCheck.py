@@ -391,12 +391,18 @@ def check_sdp_st2110_20(md: MediaDescriptor) -> None:
     if md.packing_mode not in {MatroxSdpEnums.PackingMode2110GPM, MatroxSdpEnums.PackingMode2110BPM}:
         raise SdpCheckError("ST2110-20 invalid PM")
     
+    # The ST2110-20 document changed the version tobe used for SSN very late in the approval process and a
+    # number of vendors use vesions of the document withthe 2021 value and some other with the 2022 one. 
+    # We allow for both values in order not to penalize those early adopters of the specification.
     if md.smpte_standard_number == "ST2110-20:2017":
         if md.transfer_characteristic == MatroxSdpEnums.TransferST2115LOGS3 or md.colorimetry == MatroxSdpEnums.ColorimetryALPHA:
             raise SdpCheckError("ST2110-20 invalid SSN, ST2110-20:2017 cannot be used with ALPHA or ST2115LOGS3")
     elif md.smpte_standard_number == "ST2110-20:2021":
         if md.transfer_characteristic != MatroxSdpEnums.TransferST2115LOGS3 and md.colorimetry != MatroxSdpEnums.ColorimetryALPHA:
             raise SdpCheckError("ST2110-20 invalid SSN, ST2110-20:2021 cannot be used without ALPHA or ST2115LOGS3")
+    elif md.smpte_standard_number == "ST2110-20:2022":
+        if md.transfer_characteristic != MatroxSdpEnums.TransferST2115LOGS3 and md.colorimetry != MatroxSdpEnums.ColorimetryALPHA:
+            raise SdpCheckError("ST2110-20 invalid SSN, ST2110-20:2022 cannot be used without ALPHA or ST2115LOGS3")
     else:
         raise SdpCheckError("ST2110-20 invalid SSN")
     
