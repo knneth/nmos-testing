@@ -147,15 +147,13 @@ class IS11TestAnalyzer:
                 # User explicitly specified --with-{flag_name}
                 # Must validate that test results agree (capability exists)
                 if not auto_detect_with:
-                    raise ValueError(f"Command-line specifies --with-{flag_name}, "
-                                     "but test results indicate no {flag_name} capability")
+                    raise ValueError(f"Command-line specifies --with-{flag_name}, but test results indicate no {flag_name} capability")
                 return explicit_with, None
             elif explicit_without is not None:
                 # User explicitly specified --without-{flag_name}
                 # Must validate that test results agree (capability doesn't exist)
                 if not auto_detect_without:
-                    raise ValueError(f"Command-line specifies --without-{flag_name}, "
-                                     "but test results indicate {flag_name} capability exists")
+                    raise ValueError(f"Command-line specifies --without-{flag_name}, but test results indicate {flag_name} capability exists")
                 return None, explicit_without
             else:
                 # No explicit specification - use auto-detected values
@@ -178,6 +176,14 @@ class IS11TestAnalyzer:
         # EDID detection
         has_edid_inputs = test_01_01 and test_01_01.state != TestState.COULD_NOT_TEST
         has_edid_outputs = test_03_00 and test_03_00.state != TestState.COULD_NOT_TEST
+
+        # For devices supporting both input and output, while testing either we must ignore
+        # the other as we have restriction that edid support must be the same for both.
+        if spec.with_inputs and spec.without_outputs:
+            has_outputs = False
+            
+        if spec.without_inputs and spec.with_outputs:
+            has_inputs = False
 
         if (has_inputs and has_outputs and (has_edid_inputs != has_edid_outputs)):
             raise ValueError("Inputs and outputs must have the same EDID support")
