@@ -60,7 +60,7 @@ This folder contains the IPMX NMOS Testing package. Follow these instructions to
     # same as IPMX_REGISTRY_ADDRESS as a string
     CONFIG.QUERY_API_HOST = '10.208.10.55'     
 
-    # same as IPMX_REGISTRY_PORT
+    # same as the registry query port defined in IPMX_REGISTRY_PORT
     CONFIG.QUERY_API_PORT = 8870
 
     # IP address and port of the reference Sender to be used for IS-11 testing of the Receivers

@@ -212,7 +212,7 @@ Follow the manual tests described in TP-1 sections 15.7
 
 For TP-1 sections 15.8
 #### Peer-to-Peer Testing
-To test the peer-to-peer mode it is required to shutdown all the NMOS Registry servers and to remove the DNS_SD entries of NMOS Registry servers. Then update for this test only the UserConfig.py file of the IPMX testing environment to set CONFIG.DNS_SD_MODE = 'multicast' instead of CONFIG.DNS_SD_MODE = 'unicast'.
+To test the peer-to-peer mode it is required to shutdown all the NMOS Registry servers and to remove the DNS_SD entries of NMOS Registry servers. Then update for this test only the `nmostesting\UserConfig.py` file of the IPMX testing environment to set CONFIG.DNS_SD_MODE = 'multicast' instead of CONFIG.DNS_SD_MODE = 'unicast'.
 
    - Test the Senders of the DuT:
    ```batch
@@ -228,7 +228,7 @@ To test the peer-to-peer mode it is required to shutdown all the NMOS Registry s
    - Results are sorted with FAILED tests printed last
    - Review output for any failures (some may be expected per test plan)
 
-Restore the original Userconfig.py file with CONFIG.DNS_SD_MODE = 'unicast' and restore the DNS-SD entries of the NMOS Registry servers then restart them.
+Restore the original `nmostesting\UserConfig.py` file with CONFIG.DNS_SD_MODE = 'unicast' and restore the DNS-SD entries of the NMOS Registry servers then restart them.
 
 ### Phase 2: NMOS API Compliance Testing
 
@@ -306,6 +306,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
 
     - For HDMI, use a source that follows the EDID’s preferred mode. If such a source is not available, set the CONFIG.IS11_SOURCE_EDID_VERIFICATION option to True and connect a source device (e.g., a Kramer) that allows verifying the EDID produced by the DuT. The test suite will pause and indicate the expected refresh/sample rate value to be verified in the EDID’s preferred mode using the tool. 
     - Activate the Senders of the DuT, each one using a configuration from the `cfg` directory
+    - The source must be directly connected to the Sender.
 
     - Test the Senders of the DuT:
     ```batch
@@ -326,7 +327,8 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
     IPMX-CHECK-HDMI-IS11s.bat
     ```
     - Activate reference or preferred Senders, each one using a configuration from the `cfg` directory and have the Receivers of the DuT subscribe to the streams.
-    - Make sure the reference or preferred Senders are properly configured in the UserConfig.py file
+    - Make sure the reference or preferred Senders are properly configured in the UserConfig.py file. The reference or preferred Sender must be used by only one Receiver at a time because the test will de-activate and re-activate it.
+    - The DuT output must be connected.
 
     - Test the Receivers of the DuT:
     ```batch
@@ -510,6 +512,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
 
 5. **Command Prompt**: Use a regular Windows Command Prompt to run batch files, **do NOT use PowerShell**.
 
+6. **Debugging**: For example if running IS-04-01s.bat and you get a FAIL for test_08, you should look at the batch file for getting the suite name, here IS-04-01, then get the file name according to the test suite in the `nmostesting\suites` directory, here `nmostesting\suites\IS0401Test.py` and search for a function named `test_08` and look for the error message.
 ---
 
 *This IPMX testing environment is a work-in-progress. Bug reports and suggestions to make it better are welcome.*

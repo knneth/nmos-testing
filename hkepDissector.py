@@ -1287,7 +1287,7 @@ class HKEPDissector:
                     zero_timestamp_packets.append(idx)
             
             if zero_timestamp_packets:
-                print(f"\n⚠ WARNING: PCAP file quality issue detected!")
+                print(f"\n[!] WARNING: PCAP file quality issue detected!")
                 print(f"  {len(zero_timestamp_packets)} out of {len(packets)} packets have missing timestamps (0.0)")
                 print(f"  First affected packets: {zero_timestamp_packets[:20]}")
                 if len(zero_timestamp_packets) > 20:
@@ -1297,7 +1297,7 @@ class HKEPDissector:
                 # Fix timestamps by interpolating based on packet ordering
                 fixed_count = self._fix_missing_timestamps(packets)
                 
-                print(f"  ✓ Fixed {fixed_count} timestamps using interpolation from surrounding packets")
+                print(f"  [OK] Fixed {fixed_count} timestamps using interpolation from surrounding packets")
                 print(f"  Continuing with analysis...\n")
         except Exception as e:
             print(f"Error reading PCAP file: {e}")
@@ -2157,12 +2157,12 @@ class HKEPDissector:
         # Show incomplete exchanges warning (once, regardless of section)
         if verbose and incomplete_exchanges and not hasattr(self, '_incomplete_warning_shown'):
             print(f"\n{'='*80}")
-            print(f"⚠ INCOMPLETE EXCHANGES DETECTED")
+            print(f"[!] INCOMPLETE EXCHANGES DETECTED")
             print(f"{'='*80}")
             print(f"\nThe following {len(incomplete_exchanges)} exchange(s) are INCOMPLETE and excluded from validation:")
             print(f"(Likely due to missing packets or incomplete capture)\n")
             for exchange, reason in incomplete_exchanges:
-                print(f"  • Exchange: {exchange.session_key}")
+                print(f"  - Exchange: {exchange.session_key}")
                 print(f"    Messages captured: {exchange.get_message_count()}")
                 print(f"    Reason: {reason}")
                 if exchange.messages:
