@@ -513,6 +513,9 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
 5. **Command Prompt**: Use a regular Windows Command Prompt to run batch files, **do NOT use PowerShell**.
 
 6. **Debugging**: For example if running IS-04-01s.bat and you get a FAIL for test_08, you should look at the batch file for getting the suite name, here IS-04-01, then get the file name according to the test suite in the `nmostesting\suites` directory, here `nmostesting\suites\IS0401Test.py` and search for a function named `test_08` and look for the error message.
+
+7. **Redundancy**: The IPMX test suite requires that ST 2022-7 redundancy is not active on the DuT during the NMOS tests. It is highly recommended to deactivate redundancy on the Senders and Receivers prior to running this test plan.
+
 ---
 
 *This IPMX testing environment is a work-in-progress. Bug reports and suggestions to make it better are welcome.*
