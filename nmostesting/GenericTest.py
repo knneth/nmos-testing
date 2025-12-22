@@ -29,6 +29,8 @@ from .TestResult import Test
 from . import Config as CONFIG
 from .mocks.Auth import AuthServer
 
+from .IPMXUtils import filter_resources
+
 
 NMOS_WIKI_URL = "https://github.com/AMWA-TV/nmos/wiki"
 
@@ -683,10 +685,16 @@ class GenericTest(object):
 
     def save_subresources(self, path, response):
         """Get IDs contained within an array JSON response such that they can be interrogated individually"""
+
+        def last_segment(p: str) -> str:
+            p = p.rstrip('/')
+            return p.rsplit('/', 1)[-1] if p else ""
+
         subresources = list()
         try:
             if isinstance(response.json(), list):
-                for entry in response.json():
+                resources = filter_resources(response.json(), last_segment(path))
+                for entry in resources:
                     # In general, lists return fully fledged objects which each have an ID
                     if isinstance(entry, dict) and "id" in entry:
                         subresources.append(entry["id"])
@@ -694,6 +702,8 @@ class GenericTest(object):
                     elif isinstance(entry, str) and entry.endswith("/"):
                         res_id = entry.rstrip("/")
                         subresources.append(res_id)
+                    elif isinstance(entry, str):
+                        subresources.append(entry)
             elif isinstance(response.json(), dict):
                 for key, value in response.json().items():
                     # Cover the audio channel mapping spec case with dictionary keys
