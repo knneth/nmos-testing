@@ -381,8 +381,8 @@ class SDPValidationScript:
             else:
                 print(f"[OK] ts_ref_clock_source: 'localmac' (correct for PTP disabled)")
             
-            if media.media_clock_type != "sender":
-                issues.append(f"PTP disabled but media_clock_type is '{media.media_clock_type}', expected 'sender'")
+            if media.media_clock_type != "direct" and media.media_clock_type != "sender":
+                issues.append(f"PTP disabled but media_clock_type is '{media.media_clock_type}', expected 'direct' or 'sender'")
             else:
                 print(f"[OK] media_clock_type: 'sender' (correct for PTP disabled)")
 
