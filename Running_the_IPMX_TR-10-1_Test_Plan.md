@@ -321,7 +321,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
      - *If an IPMX device using the UserConfig option IS11_SOURCE_EDID_VERIFICATION=True produces the expected refresh rate in the source EDID preferred mode, it is then allowed to get the result Could Not Test for test_02_03_05_01, otherwise it must PASS.*
      
       - *If an IPMX device declares in its conformance IPMX Device Declaration supporting the streaming of only one audio sample rate. It is then allowed to get the result Could Not Test for test_02_03_05_02, otherwise it must PASS.*
-     - *If an IPMX device using the UserConfig option IS11_SOURCE_EDID_VERIFICATION=True produces the expected sample rate in the source EDID preferred mode, it is then allowed to get the result Could Not Test for test_02_03_05_01, otherwise it must PASS.*
+     - *If an IPMX device using the UserConfig option IS11_SOURCE_EDID_VERIFICATION=True produces the expected sample rate in the source EDID preferred mode, it is then allowed to get the result Could Not Test for test_02_03_05_02, otherwise it must PASS.*
 
     ```batch
     IPMX-CHECK-HDMI-IS11s.bat
