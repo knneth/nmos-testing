@@ -1527,6 +1527,10 @@ class IpmxSdpTest(GenericTest):
                 except Exception:
                     pass  # ignore if file not found
 
+                # Give time for some implementations to bring down the previous stream before
+                # the new packet capture on the local host is triggered.
+                time.sleep(1) 
+
                 try:
                     if platform.system() == "Windows":
                         capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
@@ -1847,6 +1851,10 @@ class IpmxSdpTest(GenericTest):
                     os.remove(os.path.join(output_dir, sdp_filename))
                 except Exception:
                     pass  # ignore if file not found
+
+                # Give time for some implementations to bring down the previous stream before
+                # the new packet capture on the VB440 is triggered.
+                time.sleep(1) 
 
                 try:
                     if platform.system() == "Windows":
