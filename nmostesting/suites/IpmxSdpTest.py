@@ -2079,7 +2079,8 @@ class IpmxSdpTest(GenericTest):
                                      .format(sender["id"]))
 
                 # Check that the device is not using redundancy (simplication for this test)
-                if len(active["transport_params"]) > 1:
+                extra_legs = len(active["transport_params"]) - 1
+                if extra_legs > 0:
                     print("WARNING: Sender {} is configured with redundancy, using leg 0 only for this test".format(sender["id"]))
 
                 # Check the multicast address of the transport parameters
@@ -2162,7 +2163,7 @@ class IpmxSdpTest(GenericTest):
                     for ip in ip_to_test_with_success:
                         valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                             "master_enable": False,
-                            "transport_params": [{"destination_ip": ip}],
+                            "transport_params": [{"destination_ip": ip}] + [{}] * extra_legs,
                             "activation": {"mode": "activate_immediate"}
                         })
                         if not valid:
@@ -2177,7 +2178,7 @@ class IpmxSdpTest(GenericTest):
                     for ip in ip_to_test_with_failure:
                         valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                             "master_enable": False,
-                            "transport_params": [{"destination_ip": ip}],
+                            "transport_params": [{"destination_ip": ip}] + [{}] * extra_legs,
                             "activation": {"mode": "activate_immediate"}
                         })
                         if valid:
@@ -2186,7 +2187,7 @@ class IpmxSdpTest(GenericTest):
                     # Always try to re-activate the sender with its original multicast address (best effort)
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": True,
-                        "transport_params": [{"destination_ip": multicast_ip}],
+                        "transport_params": [{"destination_ip": multicast_ip}] + [{}] * extra_legs,
                         "activation": {"mode": "activate_immediate"}
                     })
                     if not valid:
@@ -2243,7 +2244,8 @@ class IpmxSdpTest(GenericTest):
                                      "a default multicast address".format(receiver["id"]))
 
                 # Check that the device is not using redundancy (simplication for this test)
-                if len(active["transport_params"]) > 1:
+                extra_legs = len(active["transport_params"]) - 1
+                if extra_legs > 0:
                     print("WARNING: Receiver {} is configured with redundancy, using leg 0 only for this test".format(receiver["id"]))
 
                 # Check the multicast address of the transport parameters
@@ -2304,7 +2306,7 @@ class IpmxSdpTest(GenericTest):
                 for ip in ip_to_test_with_success:
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": False,
-                        "transport_params": [{"multicast_ip": ip}],
+                        "transport_params": [{"multicast_ip": ip}] + ([{"rtp_enabled": False}] * extra_legs),
                         "activation": {"mode": "activate_immediate"}
                     })
                     if not valid:
@@ -2319,7 +2321,7 @@ class IpmxSdpTest(GenericTest):
                 for ip in ip_to_test_with_failure:
                     valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
                         "master_enable": False,
-                        "transport_params": [{"multicast_ip": ip}],
+                        "transport_params": [{"multicast_ip": ip}] + ([{"rtp_enabled": False}] * extra_legs),
                         "activation": {"mode": "activate_immediate"}
                     })
                     if valid:
