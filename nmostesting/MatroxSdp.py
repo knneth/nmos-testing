@@ -600,6 +600,7 @@ class MediaDescriptor:
         # TS Reference Clock
         self.ts_ref_clock_source: Optional[EnumId] = None
         self.ts_ref_clock_ptp_version: str = ""
+        self.ts_ref_clock_ptp_traceable: bool = False
         self.ts_ref_clock_ptp_gmid: str = ""
         self.ts_ref_clock_ptp_domain: str = ""
         self.ts_ref_clock_ntp_address: str = ""
@@ -651,6 +652,7 @@ class MatroxSdp:
         # TS Reference Clock
         self.ts_ref_clock_source: Optional[EnumId] = None
         self.ts_ref_clock_ptp_version: str = ""
+        self.ts_ref_clock_ptp_traceable: bool = False
         self.ts_ref_clock_ptp_gmid: str = ""
         self.ts_ref_clock_ptp_domain: str = ""
         self.ts_ref_clock_ntp_address: str = ""
@@ -1020,6 +1022,7 @@ class MatroxSdp:
             self.current_media.ts_ref_clock_local_mac_address = self.ts_ref_clock_local_mac_address
             self.current_media.ts_ref_clock_ntp_address = self.ts_ref_clock_ntp_address
             self.current_media.ts_ref_clock_ptp_version = self.ts_ref_clock_ptp_version
+            self.current_media.ts_ref_clock_ptp_traceable = self.ts_ref_clock_ptp_traceable
             self.current_media.ts_ref_clock_ptp_gmid = self.ts_ref_clock_ptp_gmid
             self.current_media.ts_ref_clock_ptp_domain = self.ts_ref_clock_ptp_domain
 
@@ -1186,6 +1189,7 @@ class MatroxSdp:
         ts_ref_clock_local_mac_address = ""
         ts_ref_clock_ntp_address = ""
         ts_ref_clock_ptp_version = ""
+        ts_ref_clock_ptp_traceable = False
         ts_ref_clock_ptp_gmid = ""
         ts_ref_clock_ptp_domain = ""
         if ts_ref_clock_source.s == "local":
@@ -1199,7 +1203,12 @@ class MatroxSdp:
             if len(split_ptp) < 2:
                 return "invalid ts-refclk ptp clock value"
             ts_ref_clock_ptp_version = split_ptp[0]
-            ts_ref_clock_ptp_gmid = split_ptp[1]
+
+            if split_ptp[1] == "traceable":
+                ts_ref_clock_ptp_traceable = True
+            else:
+                ts_ref_clock_ptp_gmid = split_ptp[1]
+
             if len(split_ptp) > 2:
                 ts_ref_clock_ptp_domain = split_ptp[2]
         else:
@@ -1209,6 +1218,7 @@ class MatroxSdp:
             self.current_media.ts_ref_clock_local_mac_address = ts_ref_clock_local_mac_address
             self.current_media.ts_ref_clock_ntp_address = ts_ref_clock_ntp_address
             self.current_media.ts_ref_clock_ptp_version = ts_ref_clock_ptp_version
+            self.current_media.ts_ref_clock_ptp_traceable = ts_ref_clock_ptp_traceable
             self.current_media.ts_ref_clock_ptp_gmid = ts_ref_clock_ptp_gmid
             self.current_media.ts_ref_clock_ptp_domain = ts_ref_clock_ptp_domain
         else:
@@ -1216,6 +1226,7 @@ class MatroxSdp:
             self.ts_ref_clock_local_mac_address = ts_ref_clock_local_mac_address
             self.ts_ref_clock_ntp_address = ts_ref_clock_ntp_address
             self.ts_ref_clock_ptp_version = ts_ref_clock_ptp_version
+            self.ts_ref_clock_ptp_traceable = ts_ref_clock_ptp_traceable
             self.ts_ref_clock_ptp_gmid = ts_ref_clock_ptp_gmid
             self.ts_ref_clock_ptp_domain = ts_ref_clock_ptp_domain
         return None

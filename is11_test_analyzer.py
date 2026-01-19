@@ -348,12 +348,18 @@ class IS11TestAnalyzer:
             failures.append("test_01_01 must PASS for inputs with EDID support")
 
         # In general Base EDID tests are optional but should be PASS or Could Not Test but IPMX requires it.
-        base_edid_tests = ['test_01_02', 'test_01_03', 'test_01_05', 'test_01_06']
+        base_edid_tests = ['test_01_02', 'test_01_03', 'test_01_05']
         for test_name in base_edid_tests:
             test_result = self.get_test_result(test_name)
             if test_result and test_result.state not in [TestState.PASS]:
                 failures.append(f"{test_name} must be PASS for inputs with EDID support "
                                 "(Base EDID support is required)")
+
+        # adjust_to_cap is optional
+        test_name = 'test_01_06'
+        test_result = self.get_test_result(test_name)
+        if test_result and test_result.state not in [TestState.PASS, TestState.COULD_NOT_TEST]:
+            failures.append(f"{test_name} must be PASS or COULD_NOT_TEST for inputs with EDID support")
 
         # test_01_04 should be Could Not Test (no inputs without EDID support)
         test_01_04 = self.get_test_result('test_01_04')
