@@ -3213,7 +3213,7 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self.outputs) == 0:
+        if len(self.connected_outputs) == 0:
             return test.UNCLEAR("No IS-11 receiver outputs")
         """
         This test requires streaming from a Sender in order to
@@ -3225,7 +3225,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.outputs:
+        for output_id in self.connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3349,7 +3349,7 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self.outputs) == 0:
+        if len(self._connected_outputs) == 0:
             return test.UNCLEAR("No IS-11 receiver outputs")
         """
         This test requires streaming from a Sender in order to
@@ -3361,7 +3361,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.outputs:
+        for output_id in self.connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3747,7 +3747,7 @@ class IS1101Test(GenericTest):
         return self.has_i_o(id, "receiver")
 
     def is_input_adjust_to_caps(self, id):
-        return self.has_property(id, "input", "adjust_to_caps")
+        return self.has_boolean_property_true(id, "input", "adjust_to_caps")
 
     def has_property(self, id, type, property):
         i_o = "inputs/" if type == "input" else "outputs/"

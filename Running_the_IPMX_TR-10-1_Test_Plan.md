@@ -223,7 +223,7 @@ To test the peer-to-peer mode it is required to shutdown all the NMOS Registry s
 
    - Test the Receivers of the DuT:
    ```batch
-   IS-04-01r.bat
+   IS-04-03r.bat
    ```
    - Results are sorted with FAILED tests printed last
    - Review output for any failures (some may be expected per test plan)

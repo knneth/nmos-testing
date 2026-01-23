@@ -19,6 +19,7 @@ from .IS05Utils import IS05Utils
 from .NMOSUtils import NMOSUtils
 from .GenericTest import GenericTest
 from .IPMXUtils import filter_resources
+import time
 
 NODE_API_KEY = "node"
 CONN_API_KEY = "connection"
@@ -145,6 +146,9 @@ class IS11Utils(NMOSUtils, GenericTest):
                 return "FAIL", ("Expected positive \"master_enable\" and "
                                 "\"compliant_stream\" state of receiver {}, got {} and {}"
                                 .format(receiver_id, master_enable, state))
+            
+            time.sleep(CONFIG.STABLE_STATE_DELAY)
+
         activated_receivers += 1
         return valid, activated_receivers
 
