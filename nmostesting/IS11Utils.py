@@ -127,7 +127,7 @@ class IS11Utils(NMOSUtils, GenericTest):
                         "single/receivers/" + receiver_id + "/active"
                     )
             if not valid:
-                return "FAIL", response
+                return False, response
 
             master_enable = response["master_enable"]
 
@@ -136,14 +136,14 @@ class IS11Utils(NMOSUtils, GenericTest):
                         "receivers/" + receiver_id + "/status"
                     )
             if not valid:
-                return "FAIL", response
+                return False, response
 
             state = response["state"]
 
             if master_enable and state == "compliant_stream":
                 break
             elif i == CONFIG.STABLE_STATE_ATTEMPTS - 1:
-                return "FAIL", ("Expected positive \"master_enable\" and "
+                return False, ("Expected positive \"master_enable\" and "
                                 "\"compliant_stream\" state of receiver {}, got {} and {}"
                                 .format(receiver_id, master_enable, state))
             
@@ -157,7 +157,7 @@ class IS11Utils(NMOSUtils, GenericTest):
         for sender_id in reference_senders[format]:
             valid, response = self.reference_is04_utils.checkCleanRequestJSON("GET", "senders/" + sender_id)
             if not valid:
-                return "FAIL", response
+                return False, response
 
             sender = response
 
@@ -165,11 +165,11 @@ class IS11Utils(NMOSUtils, GenericTest):
                 continue
 
             if response["flow_id"] is None:
-                return "UNCLEAR", ("\"flow_id\" of sender {} is null".format(sender_id))
+                return False, ("\"flow_id\" of sender {} is null".format(sender_id))
 
             valid, response = self.reference_is04_utils.checkCleanRequestJSON("GET", "flows/" + sender["flow_id"])
             if not valid:
-                return "FAIL", response
+                return False, response
 
             if response["media_type"] not in receiver["caps"]["media_types"]:
                 continue
@@ -179,7 +179,7 @@ class IS11Utils(NMOSUtils, GenericTest):
                 "single/senders/" + sender_id + "/active"
                 )
             if not valid:
-                return "FAIL", response
+                return False, response
 
             json_data = {
                     "master_enable": True,
@@ -191,7 +191,7 @@ class IS11Utils(NMOSUtils, GenericTest):
                 json_data
             )
             if not valid:
-                return "FAIL", response
+                return False, response
             sdp_transport_file = self.get_transportfile(
                 CONFIG.IS11_REFERENCE_SENDER_CONNECTION_API_URL,
                 sender_id
@@ -212,5 +212,5 @@ class IS11Utils(NMOSUtils, GenericTest):
                 "single/receivers/" + receiver_id + "/staged",
                 json_data)
             if not valid:
-                return "FAIL", response
+                return False, response
         return valid, ""

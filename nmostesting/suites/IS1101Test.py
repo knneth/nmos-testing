@@ -72,6 +72,8 @@ class IS1101Test(GenericTest):
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.conn_url = self.apis[CONN_API_KEY]["url"]
         self.connected_outputs = []
+        self.video_connected_outputs = []
+        self.audio_connected_outputs = []
         self.not_edid_connected_outputs = []
         self.edid_connected_outputs = []
         self.reference_senders = {}
@@ -143,6 +145,8 @@ class IS1101Test(GenericTest):
         self.adjust_to_caps_inputs = list(filter(self.is_input_adjust_to_caps, self.base_edid_inputs))
 
         self.connected_outputs = list(filter(self.is_output_connected, self.outputs))
+        self.video_connected_outputs = []
+        self.audio_connected_outputs = []
         self.disconnected_outputs = list(set(self.outputs) - set(self.connected_outputs))
 
         self.edid_outputs = list(filter(self.has_output_edid_support, self.outputs))
@@ -3174,6 +3178,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
         format = "urn:x-nmos:format:video"
+        self.video_connected_outputs = []
         activated_receivers = 0
         valid, response = self.is11_utils.get_receivers_with_or_without_outputs_id(self.receivers, format)
         if not valid:
@@ -3196,7 +3201,28 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
+            # Verify all outputs of this receiver are connected.
+            valid, response = self.do_request(
+                "GET", self.compat_url + "receivers/" + receiver_id + "/outputs/"
+            )
+            if not valid:
+                return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+            if response.status_code != 200:
+                return test.FAIL("The receiver's outputs {} streamcompatibility request has failed: {}"
+                                 .format(receiver_id, response))
+            try:
+                receiver_outputs = response.json()
+            except json.JSONDecodeError:
+                return test.FAIL("Non-JSON response returned from the Stream Compatibility Management API")
+            except KeyError as e:
+                return test.FAIL("Unable to find expected key: {}".format(e))
+
+            # Requirement: All outputs associated with the receiver must be connected
+            if not all(oid in self.connected_outputs for oid in receiver_outputs):
+                return test.WARNING("All outputs associated with the video receiver must be connected")
+
+            self.video_connected_outputs.extend(receiver_outputs)
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3213,8 +3239,8 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self.connected_outputs) == 0:
-            return test.UNCLEAR("No IS-11 receiver outputs")
+        if len(self.video_connected_outputs) == 0:
+            return test.UNCLEAR("No IS-11 connected video receiver outputs")
         """
         This test requires streaming from a Sender in order to
         verify the state of the Receiver and the associated outputs.
@@ -3225,7 +3251,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.connected_outputs:
+        for output_id in self.video_connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3310,6 +3336,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
         format = "urn:x-nmos:format:audio"
+        self.audio_connected_outputs = []
         activated_receivers = 0
         valid, response = self.is11_utils.get_receivers_with_or_without_outputs_id(self.receivers, format)
         if not valid:
@@ -3332,7 +3359,28 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
+            # Verify all outputs of this receiver are connected.
+            valid, response = self.do_request(
+                "GET", self.compat_url + "receivers/" + receiver_id + "/outputs/"
+            )
+            if not valid:
+                return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+            if response.status_code != 200:
+                return test.FAIL("The receiver's outputs {} streamcompatibility request has failed: {}"
+                                 .format(receiver_id, response))
+            try:
+                receiver_outputs = response.json()
+            except json.JSONDecodeError:
+                return test.FAIL("Non-JSON response returned from the Stream Compatibility Management API")
+            except KeyError as e:
+                return test.FAIL("Unable to find expected key: {}".format(e))
+
+            # Requirement: All outputs associated with the receiver must be connected
+            if not all(oid in self.connected_outputs for oid in receiver_outputs):
+                return test.WARNING("All outputs associated with the audio receiver must be connected")
+
+            self.audio_connected_outputs.extend(receiver_outputs)
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3349,8 +3397,8 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self._connected_outputs) == 0:
-            return test.UNCLEAR("No IS-11 receiver outputs")
+        if len(self.audio_connected_outputs) == 0:
+            return test.UNCLEAR("No IS-11 connected audio receiver outputs")
         """
         This test requires streaming from a Sender in order to
         verify the state of the Receiver and the associated outputs.
@@ -3361,7 +3409,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.connected_outputs:
+        for output_id in self.audio_connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3500,7 +3548,7 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3545,7 +3593,7 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+            
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
