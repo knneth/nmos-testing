@@ -996,6 +996,7 @@ class MatroxSdp:
             self.current_media.is_connection_ipv6 = self.is_connection_ipv6
         if self.bitrate_kbits:
             self.current_media.bitrate_kbits = self.bitrate_kbits
+
         for i in range(MAX_HKEPS):
             if self.hkep_desc[i].address:
                 self.current_media.hkep_desc[i].address = self.hkep_desc[i].address
@@ -1003,8 +1004,12 @@ class MatroxSdp:
                 self.current_media.hkep_desc[i].port = self.hkep_desc[i].port
                 self.current_media.hkep_desc[i].node_id = self.hkep_desc[i].node_id
                 self.current_media.hkep_desc[i].port_id = self.hkep_desc[i].port_id
+                self.current_media.hkep = True
+
         if self.privacy_desc.protocol:
             self.current_media.privacy_desc = self.privacy_desc
+            self.current_media.privacy = True
+
         if self.session_control:
             self.current_media.sub_stream_control = self.session_control
         for i in range(MAX_EXTMAPS):
