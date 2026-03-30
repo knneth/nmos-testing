@@ -627,7 +627,7 @@ class MatroxSdp:
         self.is_origin_ipv6: bool = False
         self.origin_address: str = ""
         # Session Name
-        self.session_name: str = ""
+        self.session_name: Optional[str] = None
         # Session Information
         self.session_information: str = ""
         # Timing
@@ -1969,22 +1969,25 @@ class MatroxSdp:
     def check_sdp_base_requirements(self) -> Optional[str]:
         if not self.username or not self.session_id or not self.session_version or not self.origin_address:
             return "missing o= line"
-        if not self.session_name:
+        if self.session_name is None:
             return "missing s= line"
         if self.primary_media.protocol and self.primary_media.protocol.s in ("RTP/AVP", "TCP/RTP/AVP"):
             if (self.primary_media.port % 2) != 0 and not self.primary_media.rtcp_port:
                 return "missing a=rtcp: line with odd RTP port"
-            if (self.secondary_media.port % 2) != 0 and not self.secondary_media.rtcp_port:
-                return "missing a=rtcp: line with odd RTP port"
+            if self.secondary_media is not None:
+                if (self.secondary_media.port % 2) != 0 and not self.secondary_media.rtcp_port:
+                    return "missing a=rtcp: line with odd RTP port"
             if self.primary_media.port_count != 1 and self.primary_media.rtcp_port:
                 return "invalid a=rtcp: line with multiple ports"
-            if self.secondary_media.port_count != 1 and self.secondary_media.rtcp_port:
-                return "invalid a=rtcp: line with multiple ports"
+            if self.secondary_media is not None:
+                if self.secondary_media.port_count != 1 and self.secondary_media.rtcp_port:
+                    return "invalid a=rtcp: line with multiple ports"
             if not self.primary_media.rtcp_port and self.primary_media.port:
                 self.primary_media.rtcp_port = self.primary_media.port + 1
-            if not self.secondary_media.rtcp_port and self.secondary_media.port:
-                self.secondary_media.rtcp_port = self.secondary_media.port + 1
-        return None
+            if self.secondary_media is not None:
+                if not self.secondary_media.rtcp_port and self.secondary_media.port:
+                    self.secondary_media.rtcp_port = self.secondary_media.port + 1
+        return None        
 
 
 def get_h264_profile_level_from_sdp(profile_level_id: str) -> Tuple[EnumId, EnumId]:
