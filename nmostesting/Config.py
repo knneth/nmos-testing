@@ -411,9 +411,9 @@ SPECIFICATIONS = {
     },
     "bcp-004-02": {
         "repo": "bcp-004-02",
-        "branch": "v1.0-dev",
-        "versions": ["v1.0-dev"],
-        "default_version": "v1.0-dev",
+        "branch": "v1.0",
+        "versions": ["v1.0"],
+        "default_version": "v1.0",
         "apis": {
             "sender-caps": {
                 "name": "Sender Capabilities"
