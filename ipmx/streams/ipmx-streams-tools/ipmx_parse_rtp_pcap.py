@@ -707,8 +707,10 @@ def parse_rtp_header(data: bytes) -> tuple[RTPPacket, int] | None:
 
 
 def run_ffmpeg_trace(stream: Path, frames: int) -> str:
+    from ffmpeg_location import find_ffmpeg
+    _ffmpeg, _ffmpeg_env = find_ffmpeg()
     cmd = [
-        "ffmpeg",
+        _ffmpeg,
         "-hide_banner",
         "-loglevel",
         "verbose",
@@ -724,7 +726,7 @@ def run_ffmpeg_trace(stream: Path, frames: int) -> str:
         "null",
         "-",
     ]
-    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, check=False)
+    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, check=False, env=_ffmpeg_env)
     if proc.returncode != 0:
         raise SystemExit(f"ffmpeg trace_headers failed ({proc.returncode}); see stderr")
     return proc.stderr

@@ -50,9 +50,14 @@ import ipmx_parse_rtp_pcap
 import ipmx_validate_common
 import ipmx_validate_hrd
 import ipmx_validate_hrd_h264
+from ffmpeg_location import find_ffmpeg
+
+_FFMPEG, _FFMPEG_ENV = find_ffmpeg()
 
 
 def ensure_tool(name: str) -> None:
+    if name == "ffmpeg":
+        return  # already resolved by find_ffmpeg() above
     if shutil.which(name) is None:
         raise SystemExit(f"{name} was not found in PATH")
 
@@ -112,8 +117,8 @@ def build_x264_params(args: argparse.Namespace) -> str:
     return ":".join(params)
 
 
-def run_checked(cmd: list[str]) -> None:
-    proc = subprocess.run(cmd, check=False)
+def run_checked(cmd: list[str], env: dict | None = None) -> None:
+    proc = subprocess.run(cmd, check=False, env=env)
     if proc.returncode != 0:
         raise SystemExit(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
 
@@ -128,7 +133,7 @@ def encode_with_hrd(args: argparse.Namespace, encoded_mp4: Path) -> str:
         encoder = "libx264"
         param_flag = "-x264-params"
     cmd = [
-        "ffmpeg",
+        _FFMPEG,
         "-hide_banner",
         "-loglevel",
         "error",
@@ -192,7 +197,7 @@ def encode_with_hrd(args: argparse.Namespace, encoded_mp4: Path) -> str:
         str(encoded_mp4),
         ]
     )
-    run_checked(cmd)
+    run_checked(cmd, env=_FFMPEG_ENV)
     return encoder_params
 
 
@@ -216,7 +221,7 @@ def capture_rtp_to_pcap(input_mp4: Path, pcap_path: Path, port: int, payload_typ
     receiver.start()
 
     cmd = [
-        "ffmpeg",
+        _FFMPEG,
         "-hide_banner",
         "-loglevel",
         "error",
@@ -232,7 +237,7 @@ def capture_rtp_to_pcap(input_mp4: Path, pcap_path: Path, port: int, payload_typ
         "rtp",
         f"rtp://127.0.0.1:{port}",
     ]
-    proc = subprocess.run(cmd, check=False)
+    proc = subprocess.run(cmd, check=False, env=_FFMPEG_ENV)
     time.sleep(0.5)
     stop_event.set()
     receiver.join(timeout=2.0)

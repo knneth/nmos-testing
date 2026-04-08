@@ -528,7 +528,10 @@ def write_elementary_stream(nalus: list[bytes], suffix: str) -> Path:
 def build_timeline(report: RtpReport, codec: str, frames: int) -> TimelineInfo | None:
     if report.encrypted:
         return None
-    if shutil.which("ffmpeg") is None:
+    from ffmpeg_location import find_ffmpeg
+    try:
+        find_ffmpeg()
+    except SystemExit:
         return None
     stream_path = write_elementary_stream(report.nalus_bytes, f".{codec[1:]}")
     try:
@@ -564,8 +567,10 @@ def build_timeline(report: RtpReport, codec: str, frames: int) -> TimelineInfo |
 
 
 def run_ffmpeg_trace_lenient(stream: Path, frames: int) -> str:
+    from ffmpeg_location import find_ffmpeg
+    _ffmpeg, _ffmpeg_env = find_ffmpeg()
     cmd = [
-        "ffmpeg",
+        _ffmpeg,
         "-hide_banner",
         "-loglevel",
         "verbose",
@@ -581,7 +586,7 @@ def run_ffmpeg_trace_lenient(stream: Path, frames: int) -> str:
         "null",
         "-",
     ]
-    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, check=False)
+    proc = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, check=False, env=_ffmpeg_env)
     return proc.stderr
 
 
