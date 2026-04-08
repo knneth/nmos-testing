@@ -352,35 +352,9 @@ def _find_python39() -> str:
 
 _PYTHON = _find_python39()
 
-# Matrox ffmpeg selection (adds -hdcp_scramble / -privacy_scramble to the RTP muxer).
-#
-#   1. /usr/local/bin/ffmpeg — installed Matrox build (preferred); after running
-#      ldconfig its libraries are registered system-wide, so no LD_LIBRARY_PATH needed.
-#   2. ../ffmpeg-matrox/src/matrox-build/ffmpeg — in-tree sandbox/CI build; dynamically
-#      linked against the system libavformat so LD_LIBRARY_PATH must be prepended with
-#      the local matrox-build library directories.
-#   3. System ffmpeg on PATH — standard build, no HDCP/privacy support (fallback).
-_MATROX_BUILD_DIR = Path(__file__).resolve().parent.parent / "ffmpeg-matrox" / "src" / "matrox-build"
-_MATROX_FFMPEG_BIN = _MATROX_BUILD_DIR / "ffmpeg"
+from ffmpeg_location import find_ffmpeg
 
-if Path("/usr/local/bin/ffmpeg").exists():
-    # Case 1: properly installed; ldconfig has registered /usr/local/lib.
-    _FFMPEG = "/usr/local/bin/ffmpeg"
-    _FFMPEG_ENV: dict | None = None
-elif _MATROX_FFMPEG_BIN.exists():
-    # Case 2: in-tree build; prepend per-subdirectory library paths.
-    _FFMPEG = str(_MATROX_FFMPEG_BIN)
-    _lib_dirs = os.pathsep.join(
-        str(_MATROX_BUILD_DIR / d)
-        for d in ("libavformat", "libavcodec", "libavutil", "libswscale", "libswresample")
-    )
-    _FFMPEG_ENV = os.environ.copy()
-    existing = _FFMPEG_ENV.get("LD_LIBRARY_PATH", "")
-    _FFMPEG_ENV["LD_LIBRARY_PATH"] = (_lib_dirs + os.pathsep + existing) if existing else _lib_dirs
-else:
-    # Case 3: fallback — no HDCP/privacy support.
-    _FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-    _FFMPEG_ENV = None
+_FFMPEG, _FFMPEG_ENV = find_ffmpeg()
 
 
 def _source_key(cfg: StreamConfig) -> tuple[int, int, int, str]:
@@ -1120,14 +1094,11 @@ def main() -> int:
                 f"Unknown config '{args.config}'. Use --list to see available configs."
             )
 
-    # Check prerequisites
-    if shutil.which("ffmpeg") is None:
-        raise SystemExit("ffmpeg not found in PATH")
-
+    # Check prerequisites (find_ffmpeg() already raised SystemExit if missing)
     try:
         check = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, text=True,
+            [_FFMPEG, "-hide_banner", "-encoders"],
+            capture_output=True, text=True, env=_FFMPEG_ENV,
         )
         has_x265 = "libx265" in check.stdout
         has_x264 = "libx264" in check.stdout

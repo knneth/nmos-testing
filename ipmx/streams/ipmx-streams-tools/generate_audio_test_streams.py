@@ -69,7 +69,9 @@ DEFAULT_DURATION_SECONDS = 6
 DEFAULT_PAYLOAD_TYPE = 96
 DEFAULT_BASE_PORT = 15_000
 DEFAULT_BASE_SRC_PORT = 45_000
-_FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+from ffmpeg_location import find_ffmpeg
+
+_FFMPEG, _FFMPEG_ENV = find_ffmpeg()
 _SR_INJECTOR = SCRIPT_DIR / "ipmx_add_sender_reports_pcap.py"
 _AM824_VALIDATOR = SCRIPT_DIR / "ipmx_am824_validate_pcap.py"
 
@@ -314,8 +316,7 @@ def parse_source_filter(value: str) -> set[str]:
 
 
 def _ensure_prerequisites() -> None:
-    if shutil.which("ffmpeg") is None:
-        raise SystemExit("ffmpeg not found in PATH")
+    # ffmpeg availability is already checked by find_ffmpeg() at import time.
     try:
         import scapy  # noqa: F401
     except ImportError as exc:
@@ -323,7 +324,7 @@ def _ensure_prerequisites() -> None:
 
 
 def _ffmpeg_run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=_FFMPEG_ENV)
 
 
 def generate_pcm_source(

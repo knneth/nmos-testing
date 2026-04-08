@@ -74,7 +74,9 @@ DEFAULT_DURATION_SECONDS = 6
 DEFAULT_PAYLOAD_TYPE = 96
 DEFAULT_BASE_PORT = 16_000
 DEFAULT_BASE_SRC_PORT = 46_000
-_FFMPEG = "/usr/local/bin/ffmpeg"
+from ffmpeg_location import find_ffmpeg
+
+_FFMPEG, _FFMPEG_ENV = find_ffmpeg()
 _SR_INJECTOR = SCRIPT_DIR / "ipmx_add_sender_reports_pcap.py"
 _PCM_VALIDATOR = SCRIPT_DIR / "ipmx_pcm_validate_pcap.py"
 
@@ -197,7 +199,7 @@ def capture_pcm_rtp(
         cmd.extend(["-privacy_scramble", "1"])
     cmd.append(f"rtp://127.0.0.1:{port}")
 
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=_FFMPEG_ENV)
     time_mod.sleep(0.5)
     stop.set()
     thr.join(timeout=2.0)
