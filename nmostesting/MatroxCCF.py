@@ -1329,7 +1329,7 @@ class Cons:
 
                 cs.check_part_valid()
 
-                for k in cs.cons.keys():
+                for k in list(cs.cons.keys()):
                     if trunk_namespace is not None and k not in trunk_namespace:
                         cs.cons.pop(k)
 
@@ -1402,7 +1402,7 @@ class Cons:
 
             cs.check_part_valid()
 
-            for k in cs.cons.keys():
+            for k in list(cs.cons.keys()):
                 if cs.format == FormatAudio:
                     if audio_namespace is not None and k not in audio_namespace:
                         cs.cons.pop(k)
