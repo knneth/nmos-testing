@@ -996,7 +996,6 @@ class MatroxSdp:
             self.current_media.is_connection_ipv6 = self.is_connection_ipv6
         if self.bitrate_kbits:
             self.current_media.bitrate_kbits = self.bitrate_kbits
-
         for i in range(MAX_HKEPS):
             if self.hkep_desc[i].address:
                 self.current_media.hkep_desc[i].address = self.hkep_desc[i].address
@@ -1005,11 +1004,9 @@ class MatroxSdp:
                 self.current_media.hkep_desc[i].node_id = self.hkep_desc[i].node_id
                 self.current_media.hkep_desc[i].port_id = self.hkep_desc[i].port_id
                 self.current_media.hkep = True
-
         if self.privacy_desc.protocol:
             self.current_media.privacy_desc = self.privacy_desc
             self.current_media.privacy = True
-
         if self.session_control:
             self.current_media.sub_stream_control = self.session_control
         for i in range(MAX_EXTMAPS):
@@ -1844,7 +1841,7 @@ class MatroxSdp:
         return None
 
     def process_parameter_sprop_parameter_sets(self, value: bytes) -> Optional[str]:
-        self.current_media.h264_parameter_sets = value.decode('utf-8')
+        self.current_media.h264_parameter_sets = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_packetization_mode(self, value: bytes) -> Optional[str]:
@@ -1930,15 +1927,15 @@ class MatroxSdp:
         return None
 
     def process_parameter_sprop_vps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_vps = value.decode('utf-8')
+        self.current_media.h265_vps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_sps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_sps = value.decode('utf-8')
+        self.current_media.h265_sps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_pps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_pps = value.decode('utf-8')
+        self.current_media.h265_pps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_depack_buf_nalus(self, value: bytes) -> Optional[str]:
@@ -1987,7 +1984,7 @@ class MatroxSdp:
             if self.secondary_media is not None:
                 if not self.secondary_media.rtcp_port and self.secondary_media.port:
                     self.secondary_media.rtcp_port = self.secondary_media.port + 1
-        return None        
+        return None
 
 
 def get_h264_profile_level_from_sdp(profile_level_id: str) -> Tuple[EnumId, EnumId]:
