@@ -1076,10 +1076,10 @@ class Caps:
 
                 cs.check_part_valid()
 
-                for k in cs.caps.keys():
+                for k in list(cs.caps.keys()):
                     if trunk_namespace is not None and k not in trunk_namespace:
                         cs.caps.pop(k)
-                        
+
             return new_caps
 
         # hierarchical => must ensure trunk
@@ -1149,7 +1149,7 @@ class Caps:
 
             cs.check_part_valid()
 
-            for k in cs.caps.keys():
+            for k in list(cs.caps.keys()):
                 if cs.format == FormatAudio:
                     if audio_namespace is not None and k not in audio_namespace:
                         cs.caps.pop(k)
