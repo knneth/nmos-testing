@@ -2486,7 +2486,6 @@ class IS1101Test(GenericTest):
                     else:
                         print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is INVALID")
 
-
                 # Must come after awaiting_essence and no_essence loop
                 if state == "active_constraints_violation" or do_not_accept_constraint:
                     if edid_is_compliant:
