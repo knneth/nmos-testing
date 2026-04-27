@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,7 @@ from ipmx_validate_common import (
     summarize_results,
     untestable,
     unwrap_rtp_timestamps,
+    walk_trace_pairs,
 )
 
 H265_INFO_FIELD_BITS = {
@@ -91,6 +93,14 @@ RECOVERY_POINT_FIELDS = {"recovery_poc_cnt"}
 DECODING_UNIT_INFO_FIELDS = {"decoding_unit_idx", "du_spt_cpb_removal_delay_increment"}
 
 TRACE_NAL_TYPES = {32, 33, 34, 39, 40}
+
+NAL_TO_HDR_H265 = {
+    32: "VPS",
+    33: "SPS",
+    34: "PPS",
+    39: "SEI",  # SEI_PREFIX
+    40: "SEI",  # SEI_SUFFIX
+}
 PIXCLK_TOLERANCE_PPM = 100
 
 
@@ -116,6 +126,7 @@ def _detect_sei_types_from_fields(fields: dict[str, Any]) -> set[str]:
 def _build_au_sei_map(
     report: RtpReport,
     raw_headers: list[dict[str, Any]],
+    lossy_timestamps: set[int] | None = None,
 ) -> tuple[dict[int, set[str]], set[int]]:
     """Map each AU RTP timestamp to the set of SEI types found by the ffmpeg trace.
 
@@ -130,16 +141,9 @@ def _build_au_sei_map(
     """
     sei_map: dict[int, set[str]] = {}
     traced_ts: set[int] = set()
-    header_idx = 0
-    n_headers = len(raw_headers)
-    for meta in report.nalus_meta:
-        nal_type = int(meta.get("nal_type", -1))
-        if nal_type not in TRACE_NAL_TYPES:
-            continue
-        if header_idx >= n_headers:
-            break
-        header = raw_headers[header_idx]
-        header_idx += 1
+    for meta, header in walk_trace_pairs(
+        report, raw_headers, NAL_TO_HDR_H265, skip_timestamps=lossy_timestamps
+    ):
         ts = int(meta["timestamp"])
         traced_ts.add(ts)
         if header.get("type") != "SEI":
@@ -680,7 +684,7 @@ def check_buffering_period_sei(ctx: ValidationContext) -> tuple[bool, str]:
     """Buffering Period SEI shall be present at each recovery point (IDR/CRA/BLA)."""
     if ctx.timeline is None:
         return untestable("FFmpeg trace unavailable")
-    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers)
+    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers, lossy_timestamps=ctx.timeline.lossy_timestamps)
     ra_aus = [
         au for au in ctx.rtp_report.access_units
         if any(nal in H265_RA_TYPES for nal in au.nal_types)
@@ -712,7 +716,7 @@ def check_pic_timing_sei(ctx: ValidationContext) -> tuple[bool, str]:
     """Picture Timing SEI shall be present for each access unit."""
     if ctx.timeline is None:
         return untestable("FFmpeg trace unavailable")
-    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers)
+    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers, lossy_timestamps=ctx.timeline.lossy_timestamps)
     traced_aus = [au for au in ctx.rtp_report.access_units if au.timestamp in traced_ts]
     if not traced_aus:
         return untestable("No access units covered by trace")
@@ -767,7 +771,7 @@ def check_sub_pic_hrd(ctx: ValidationContext) -> tuple[bool, str]:
     elif cpb_in_pt != 0:
         issues.append(f"sub_pic_cpb_params_in_pic_timing_sei_flag={cpb_in_pt}, expected 0")
 
-    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers)
+    au_sei, traced_ts = _build_au_sei_map(ctx.rtp_report, ctx.timeline.raw_headers, lossy_timestamps=ctx.timeline.lossy_timestamps)
     traced_aus = [au for au in ctx.rtp_report.access_units if au.timestamp in traced_ts]
     missing_du: list[int] = []
     for au in traced_aus:
@@ -2121,6 +2125,8 @@ def main() -> int:
         raise SystemExit("--max-access-units must be positive")
 
     ctx = build_context(args)
+    if ctx.timeline is not None and ctx.timeline.trace_warning:
+        print(ctx.timeline.trace_warning, file=sys.stderr)
     if ctx.encrypted:
         print("[INFO] Encryption detected — payload content is not accessible.")
         print("       NAL content checks will be marked as untestable.\n")

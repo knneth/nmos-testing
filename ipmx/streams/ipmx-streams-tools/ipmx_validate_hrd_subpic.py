@@ -624,7 +624,10 @@ def check_subpic_cpb_simulation(ctx: ValidationContext) -> list[RequirementResul
         return results
 
     bp_map, pt_map, _ = extract_sei_per_au(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report,
+        ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps,
+    )
     au_sizes = compute_au_sizes(ctx.rtp_report)
     simulated_sizes = [s for s in au_sizes if s.rtp_timestamp in pt_map]
 

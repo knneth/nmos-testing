@@ -44,6 +44,7 @@ from ipmx_validate_common import (
     ValidationContext,
     get_int_field,
     untestable,
+    walk_trace_pairs,
 )
 
 
@@ -243,6 +244,14 @@ _PIC_TIMING_FIELDS = {"au_cpb_removal_delay_minus1", "pic_dpb_output_delay"}
 
 _TRACE_NAL_TYPES = {32, 33, 34, 39, 40}
 
+_NAL_TO_HDR_H265 = {
+    32: "VPS",
+    33: "SPS",
+    34: "PPS",
+    39: "SEI",  # SEI_PREFIX
+    40: "SEI",  # SEI_SUFFIX
+}
+
 
 def _get_sei_int(fields: dict[str, Any], name: str) -> int | None:
     """Get an integer value from FFmpeg trace SEI fields.
@@ -266,6 +275,7 @@ def _get_sei_int(fields: dict[str, Any], name: str) -> int | None:
 def extract_sei_per_au(
     report: RtpReport,
     raw_headers: list[dict[str, Any]],
+    lossy_timestamps: set[int] | None = None,
 ) -> tuple[
     dict[int, BufferingPeriodInfo],
     dict[int, PictureTimingInfo],
@@ -288,16 +298,9 @@ def extract_sei_per_au(
     for au in report.access_units:
         au_index_by_ts[au.timestamp] = au.index
 
-    header_idx = 0
-    n_headers = len(raw_headers)
-    for meta in report.nalus_meta:
-        nal_type = int(meta.get("nal_type", -1))
-        if nal_type not in _TRACE_NAL_TYPES:
-            continue
-        if header_idx >= n_headers:
-            break
-        header = raw_headers[header_idx]
-        header_idx += 1
+    for meta, header in walk_trace_pairs(
+        report, raw_headers, _NAL_TO_HDR_H265, skip_timestamps=lossy_timestamps
+    ):
         ts = int(meta["timestamp"])
         traced_ts.add(ts)
 
@@ -555,28 +558,27 @@ _HRD_CHECK_DESCRIPTIONS: dict[str, str] = {
 def _compute_traced_timestamps(
     report: RtpReport,
     raw_headers: list[dict[str, Any]],
+    lossy_timestamps: set[int] | None = None,
 ) -> tuple[set[int], dict[int, set[str]]]:
-    """Compute the set of AU timestamps covered by the FFmpeg trace.
+    """Compute the set of AU timestamps covered by the FFmpeg trace (H.265).
 
-    Walks ``nalus_meta`` in parallel with ``raw_headers`` (uncorrelated),
-    matching on NAL types that FFmpeg's ``trace_headers`` emits
-    (VPS=32, SPS=33, PPS=34, SEI_PREFIX=39, SEI_SUFFIX=40).
+    Pairs each filtered nalus_meta entry with the next raw_headers entry of
+    the matching FFmpeg trace type (VPS=32, SPS=33, PPS=34,
+    SEI_PREFIX=39, SEI_SUFFIX=40). Robust to trace_headers dropping
+    individual blocks for malformed NALs.
+
+    AUs in ``lossy_timestamps`` (slice-only packets where FFmpeg emitted
+    no PPS/SEI/SPS) are skipped from coverage so that subsequent AUs stay
+    aligned with raw_headers.
 
     Returns ``(traced_timestamps, sei_type_map)`` where *sei_type_map*
     maps each AU timestamp to the set of SEI field-name keys found.
     """
     traced_ts: set[int] = set()
     sei_map: dict[int, set[str]] = {}
-    header_idx = 0
-    n_headers = len(raw_headers)
-    for meta in report.nalus_meta:
-        nal_type = int(meta.get("nal_type", -1))
-        if nal_type not in _TRACE_NAL_TYPES:
-            continue
-        if header_idx >= n_headers:
-            break
-        header = raw_headers[header_idx]
-        header_idx += 1
+    for meta, header in walk_trace_pairs(
+        report, raw_headers, _NAL_TO_HDR_H265, skip_timestamps=lossy_timestamps
+    ):
         ts = int(meta["timestamp"])
         traced_ts.add(ts)
         if header.get("type") == "SEI":
@@ -590,7 +592,8 @@ def _check_bp_presence(ctx: ValidationContext) -> tuple[bool, str]:
     if ctx.timeline is None:
         return False, "FFmpeg trace unavailable"
     traced_ts, sei_map = _compute_traced_timestamps(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report, ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps)
     h265_ra_types = {16, 17, 18, 19, 20, 21}
     ra_aus = [
         au for au in ctx.rtp_report.access_units
@@ -620,7 +623,8 @@ def _check_pt_presence(ctx: ValidationContext) -> tuple[bool, str]:
     if ctx.timeline is None:
         return False, "FFmpeg trace unavailable"
     traced_ts, sei_map = _compute_traced_timestamps(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report, ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps)
 
     h265_ra_types = {16, 17, 18, 19, 20, 21}
     first_irap_idx: int | None = None
@@ -935,7 +939,8 @@ def check_cpb_simulation(ctx: ValidationContext) -> list[RequirementResult]:
         return results
 
     bp_map, pt_map, traced_ts = extract_sei_per_au(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report, ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps)
     au_sizes = compute_au_sizes(ctx.rtp_report)
 
     # Only simulate AUs that have picture timing info
@@ -1089,7 +1094,8 @@ def check_pcap_timing(ctx: ValidationContext) -> list[RequirementResult]:
         return results
 
     bp_map, pt_map, traced_ts = extract_sei_per_au(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report, ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps)
     au_sizes = compute_au_sizes(ctx.rtp_report)
     simulated_sizes = [s for s in au_sizes if s.rtp_timestamp in pt_map]
 

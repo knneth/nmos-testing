@@ -45,6 +45,7 @@ from ipmx_validate_common import (
     ValidationContext,
     get_int_field,
     untestable,
+    walk_trace_pairs,
 )
 from ipmx_validate_hrd import (
     AccessUnitSize,
@@ -71,6 +72,12 @@ _TRACE_NAL_TYPES_H264 = {
     _H264_SEI_NAL_TYPE,
     _H264_SPS_NAL_TYPE,
     _H264_PPS_NAL_TYPE,
+}
+
+_NAL_TO_HDR_H264 = {
+    _H264_SEI_NAL_TYPE: "SEI",
+    _H264_SPS_NAL_TYPE: "SPS",
+    _H264_PPS_NAL_TYPE: "PPS",
 }
 
 
@@ -164,6 +171,7 @@ _PT_FIELDS_H264 = {"cpb_removal_delay", "dpb_output_delay"}
 def extract_sei_per_au_h264(
     report: RtpReport,
     raw_headers: list[dict[str, Any]],
+    lossy_timestamps: set[int] | None = None,
 ) -> tuple[
     dict[int, BufferingPeriodInfo],
     dict[int, PictureTimingInfo],
@@ -187,16 +195,9 @@ def extract_sei_per_au_h264(
     for au in report.access_units:
         au_index_by_ts[au.timestamp] = au.index
 
-    header_idx = 0
-    n_headers = len(raw_headers)
-    for meta in report.nalus_meta:
-        nal_type = int(meta.get("nal_type", -1))
-        if nal_type not in _TRACE_NAL_TYPES_H264:
-            continue
-        if header_idx >= n_headers:
-            break
-        header = raw_headers[header_idx]
-        header_idx += 1
+    for meta, header in walk_trace_pairs(
+        report, raw_headers, _NAL_TO_HDR_H264, skip_timestamps=lossy_timestamps
+    ):
         ts = int(meta["timestamp"])
         traced_ts.add(ts)
 
@@ -408,25 +409,23 @@ def check_hrd_self_consistency(ctx: ValidationContext) -> list[RequirementResult
 def _compute_traced_timestamps_h264(
     report: RtpReport,
     raw_headers: list[dict[str, Any]],
+    lossy_timestamps: set[int] | None = None,
 ) -> tuple[set[int], dict[int, set[str]]]:
     """Compute the set of AU timestamps covered by the FFmpeg trace (H.264).
 
-    Walks ``nalus_meta`` in parallel with ``raw_headers``, matching on
-    NAL types that FFmpeg's ``trace_headers`` emits for H.264
-    (SEI=6, SPS=7, PPS=8).
+    Pairs each filtered nalus_meta entry with the next raw_headers entry of
+    the matching FFmpeg trace type (SEI=6, SPS=7, PPS=8). Robust to
+    trace_headers dropping individual blocks for malformed NALs.
+
+    AUs in ``lossy_timestamps`` (slice-only packets where FFmpeg emitted
+    no PPS/SEI/SPS) are skipped from coverage so that subsequent AUs stay
+    aligned with raw_headers and HRD checks don't judge them.
     """
     traced_ts: set[int] = set()
     sei_map: dict[int, set[str]] = {}
-    header_idx = 0
-    n_headers = len(raw_headers)
-    for meta in report.nalus_meta:
-        nal_type = int(meta.get("nal_type", -1))
-        if nal_type not in _TRACE_NAL_TYPES_H264:
-            continue
-        if header_idx >= n_headers:
-            break
-        header = raw_headers[header_idx]
-        header_idx += 1
+    for meta, header in walk_trace_pairs(
+        report, raw_headers, _NAL_TO_HDR_H264, skip_timestamps=lossy_timestamps
+    ):
         ts = int(meta["timestamp"])
         traced_ts.add(ts)
         if header.get("type") == "SEI":
@@ -440,7 +439,10 @@ def _check_bp_presence_h264(ctx: ValidationContext) -> tuple[bool, str]:
     if ctx.timeline is None:
         return False, "FFmpeg trace unavailable"
     traced_ts, sei_map = _compute_traced_timestamps_h264(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report,
+        ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps,
+    )
 
     idr_aus = [
         au for au in ctx.rtp_report.access_units
@@ -469,7 +471,10 @@ def _check_pt_presence_h264(ctx: ValidationContext) -> tuple[bool, str]:
     if ctx.timeline is None:
         return False, "FFmpeg trace unavailable"
     traced_ts, sei_map = _compute_traced_timestamps_h264(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report,
+        ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps,
+    )
 
     first_idr_idx: int | None = None
     for au in ctx.rtp_report.access_units:
@@ -551,7 +556,10 @@ def check_cpb_simulation(ctx: ValidationContext) -> list[RequirementResult]:
         return results
 
     bp_map, pt_map, traced_ts = extract_sei_per_au_h264(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report,
+        ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps,
+    )
     au_sizes = compute_au_sizes_h264(ctx.rtp_report)
 
     simulated_sizes = [s for s in au_sizes if s.rtp_timestamp in pt_map]
@@ -704,7 +712,10 @@ def check_pcap_timing(ctx: ValidationContext) -> list[RequirementResult]:
         return results
 
     bp_map, pt_map, traced_ts = extract_sei_per_au_h264(
-        ctx.rtp_report, ctx.timeline.raw_headers)
+        ctx.rtp_report,
+        ctx.timeline.raw_headers,
+        lossy_timestamps=ctx.timeline.lossy_timestamps,
+    )
     au_sizes = compute_au_sizes_h264(ctx.rtp_report)
     simulated_sizes = [s for s in au_sizes if s.rtp_timestamp in pt_map]
 
