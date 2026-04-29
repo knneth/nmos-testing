@@ -558,6 +558,19 @@ def check_sdp_nmos(md: MediaDescriptor) -> None:
     """Check SDP compliance with NMOS. Placeholder."""
     pass
 
+def check_sdp_ipmx_usb(md: MediaDescriptor) -> None:
+    """Check SDP compliance with IPMX/USB (application/usb)."""
+    if md.type != MatroxSdpEnums.Application:
+        raise SdpCheckError("IPMX/USB requires application media type")
+    
+    if md.format_string != MatroxSdpEnums.FormatUsb:
+        raise SdpCheckError("IPMX/USB requires usb media subtype")
+    
+    if md.protocol != MatroxSdpEnums.ProtocolTCP:
+        raise SdpCheckError("IPMX/USB requires TCP protocol")
+    
+    # a=setup:passive is not verified here but it will be verified by the NMOS BCP-007-02 test suite.
+    
 
 # Example usage
 # if __name__ == "__main__":
