@@ -569,7 +569,7 @@ register_media_info_type(
 
 @dataclass
 class JXSVMediaInfoBlock(IPMXMediaInfoBlock):
-    """Media Info Block type 0x0008 (VSF TR-10-15a) for JPEG XS streams."""
+    """Media Info Block type 0x0008 (VSF TR-10-15 Part 1 §9) for JPEG XS streams."""
 
     transmode: int = 1
     packetmode: int = 0
@@ -579,13 +579,14 @@ class JXSVMediaInfoBlock(IPMXMediaInfoBlock):
 
     def to_bytes(self) -> bytes:
         payload = bytearray()
-        field0 = (
+        dw1 = (
             ((self.transmode & 0x1) << 31)
             | ((self.packetmode & 0x1) << 30)
+            | (self.ppih & 0xFFFF)
         )
-        payload.extend(field0.to_bytes(4, "big"))
-        payload.extend(self.ppih.to_bytes(2, "big"))
-        payload.extend(self.plev.to_bytes(2, "big"))
+        dw2 = (self.plev & 0xFFFF) << 16
+        payload.extend(dw1.to_bytes(4, "big"))
+        payload.extend(dw2.to_bytes(4, "big"))
         word_boundary_pad(payload)
         total_words = (4 + len(payload)) // 4
         header = bytearray()
@@ -956,14 +957,15 @@ def _decode_audio_media_info(payload: bytes) -> dict[str, object] | None:
 
 
 def _decode_jxsv_media_info(payload: bytes) -> dict[str, object] | None:
-    """Decode type 0x0008 (JPEG XS Media Info Block per VSF TR-10-15a)."""
+    """Decode type 0x0008 (JPEG XS Media Info Block per VSF TR-10-15 Part 1 §9)."""
     if len(payload) < 8:
         return None
-    field0 = int.from_bytes(payload[0:4], "big")
-    transmode = (field0 >> 31) & 0x1
-    packetmode = (field0 >> 30) & 0x1
-    ppih = int.from_bytes(payload[4:6], "big")
-    plev = int.from_bytes(payload[6:8], "big")
+    dw1 = int.from_bytes(payload[0:4], "big")
+    dw2 = int.from_bytes(payload[4:8], "big")
+    transmode = (dw1 >> 31) & 0x1
+    packetmode = (dw1 >> 30) & 0x1
+    ppih = dw1 & 0xFFFF
+    plev = (dw2 >> 16) & 0xFFFF
     return {
         "transmode": transmode,
         "packetmode": packetmode,

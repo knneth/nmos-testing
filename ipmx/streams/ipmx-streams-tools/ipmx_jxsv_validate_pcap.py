@@ -829,7 +829,7 @@ def check_mib_0x0008_length(ctx: JXSVValidationContext) -> tuple[bool, str]:
 
 
 def check_mib_0x0008_reserved(ctx: JXSVValidationContext) -> tuple[bool, str]:
-    """Reserved bits in MIB 0x0008 SHALL be 0 (TR-10-15a §8)."""
+    """Reserved bits in MIB 0x0008 SHALL be 0 (TR-10-15 Part 1 §9)."""
     if not ctx.sender_reports:
         return False, "No Sender Reports"
     if not _any_mib_0x0008(ctx):
@@ -837,11 +837,13 @@ def check_mib_0x0008_reserved(ctx: JXSVValidationContext) -> tuple[bool, str]:
     violations = 0
     for sr in ctx.sender_reports:
         blk = find_media_block(sr, 0x0008)
-        if blk is None or len(blk.payload) < 4:
+        if blk is None or len(blk.payload) < 8:
             continue
-        field0 = int.from_bytes(blk.payload[0:4], "big")
-        reserved_mask = 0x3FFFFFFF
-        if field0 & reserved_mask:
+        dw1 = int.from_bytes(blk.payload[0:4], "big")
+        dw2 = int.from_bytes(blk.payload[4:8], "big")
+        # DW1: T(1) | P(1) | reserved(14) | Ppih(16)  → reserved mask 0x3FFF0000
+        # DW2: Plev(16) | reserved(16)                → reserved mask 0x0000FFFF
+        if (dw1 & 0x3FFF0000) or (dw2 & 0x0000FFFF):
             violations += 1
     if violations:
         return False, f"{violations} MIB 0x0008 block(s) have non-zero reserved bits"

@@ -536,6 +536,352 @@ def write_jxsv_csv(
             writer.writerow(row)
 
 
+# ---------------------------------------------------------------------------
+# RFC 4175 / ST 2110-20 uncompressed video payload header definitions
+# ---------------------------------------------------------------------------
+
+SRD_HEADER_SIZE = 6   # 6 bytes per Sample Row Data Header
+RAW_EXT_SEQ_SIZE = 2  # 2 bytes for extended sequence number
+RAW_MIN_PAYLOAD = RAW_EXT_SEQ_SIZE + SRD_HEADER_SIZE  # 8 bytes minimum
+RAW_MAX_SRD_HEADERS = 3  # ST 2110-20 §6.2.1
+
+
+@dataclass
+class SRDHeader:
+    """Decoded Sample Row Data Header per ST 2110-20 §6.1.4.
+
+    Wire layout (6 bytes):
+      [0:2]  SRD Length   (16 bits) — octets of data for this sample row
+      [2:4]  F (1 bit) | SRD Row Number (15 bits)
+      [4:6]  C (1 bit) | SRD Offset (15 bits)
+    """
+    length: int       # SRD Length: octets of sample row data
+    field_id: int     # F: 0=first field (or progressive), 1=second field
+    row_number: int   # SRD Row Number (0-based from top)
+    continuation: int # C: 1=another SRD header follows, 0=last header
+    offset: int       # SRD Offset: pixel offset within sample row
+
+    @staticmethod
+    def parse(data: bytes, pos: int) -> SRDHeader | None:
+        """Parse one SRD header starting at *pos* in *data*."""
+        if pos + SRD_HEADER_SIZE > len(data):
+            return None
+        length = int.from_bytes(data[pos:pos + 2], "big")
+        fn = int.from_bytes(data[pos + 2:pos + 4], "big")
+        co = int.from_bytes(data[pos + 4:pos + 6], "big")
+        return SRDHeader(
+            length=length,
+            field_id=(fn >> 15) & 1,
+            row_number=fn & 0x7FFF,
+            continuation=(co >> 15) & 1,
+            offset=co & 0x7FFF,
+        )
+
+
+def parse_raw_payload_header(
+    payload: bytes,
+) -> tuple[int, list[SRDHeader], int] | None:
+    """Parse the RFC 4175 / ST 2110-20 RTP payload header.
+
+    Returns ``(extended_seq_num, srd_headers, data_offset)`` or ``None``
+    if the payload is too short.  *data_offset* is the byte position
+    where the first Sample Row Data Segment begins.
+    """
+    if len(payload) < RAW_MIN_PAYLOAD:
+        return None
+    ext_seq = int.from_bytes(payload[0:2], "big")
+    headers: list[SRDHeader] = []
+    pos = RAW_EXT_SEQ_SIZE
+    for _ in range(RAW_MAX_SRD_HEADERS):
+        hdr = SRDHeader.parse(payload, pos)
+        if hdr is None:
+            break
+        headers.append(hdr)
+        pos += SRD_HEADER_SIZE
+        if hdr.continuation == 0:
+            break
+    if not headers:
+        return None
+    return ext_seq, headers, pos
+
+
+@dataclass
+class RawFrameState:
+    """Tracks the assembly state of one uncompressed video frame."""
+    timestamp: int
+    first_seq: int
+    last_seq: int
+    first_capture_time: float | None
+    last_capture_time: float | None
+    packet_count: int = 0
+    total_data_bytes: int = 0
+    marker_seen: bool = False
+    observed_field_ids: set[int] = field(default_factory=set)
+    max_row_number: int = -1
+    min_row_number: int = 0x7FFF
+    last_row_number: int = -1
+    last_offset: int = -1
+    issues: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RawStreamState:
+    """Accumulated validation state across an entire RFC 4175 RTP stream."""
+    frame_count: int = 0
+    packet_count: int = 0
+    total_payload_bytes: int = 0
+    last_timestamp: int | None = None
+    last_ext_seq32: int | None = None
+    seq_analysis: RtpSequenceAnalysis = field(default_factory=RtpSequenceAnalysis)
+    issues: list[str] = field(default_factory=list)
+
+
+def _validate_raw_srd_headers(
+    headers: list[SRDHeader],
+    frame: RawFrameState,
+) -> list[str]:
+    """Return per-packet conformance issues for SRD headers."""
+    issues: list[str] = []
+
+    if len(headers) > RAW_MAX_SRD_HEADERS:
+        issues.append(
+            f"Packet contains {len(headers)} SRD headers; "
+            f"max {RAW_MAX_SRD_HEADERS} allowed (ST 2110-20 §6.2.1)"
+        )
+
+    if headers[-1].continuation != 0:
+        issues.append("Last SRD header has C=1; shall be 0 (ST 2110-20 §6.1.4)")
+
+    for i, hdr in enumerate(headers):
+        # SRD Row Number must only increase within the frame
+        if hdr.row_number < frame.last_row_number:
+            issues.append(
+                f"SRD Row Number decreased from {frame.last_row_number} to "
+                f"{hdr.row_number} (ST 2110-20 §6.1.4)"
+            )
+        # SRD Offset must only increase within same row
+        if (hdr.row_number == frame.last_row_number
+                and hdr.offset <= frame.last_offset
+                and frame.last_offset >= 0):
+            issues.append(
+                f"SRD Offset did not increase within row {hdr.row_number}: "
+                f"prev={frame.last_offset}, cur={hdr.offset} (ST 2110-20 §6.1.5)"
+            )
+        # Update tracking
+        frame.last_row_number = hdr.row_number
+        frame.last_offset = hdr.offset
+
+        if hdr.row_number > frame.max_row_number:
+            frame.max_row_number = hdr.row_number
+        if hdr.row_number < frame.min_row_number:
+            frame.min_row_number = hdr.row_number
+
+        frame.observed_field_ids.add(hdr.field_id)
+
+    return issues
+
+
+def process_raw_stream(
+    pcap_path: Path,
+    port: int | None,
+    payload_type_filter: int | None,
+    max_frames: int | None,
+    wallclock_backstep_threshold: float | None,
+    *,
+    stream_info: RtpStreamInfo | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], RawStreamState, dict[str, Any] | None]:
+    """Process an RFC 4175 / ST 2110-20 uncompressed video RTP stream.
+
+    Returns ``(packets_report, frames_report, stream_state, wallclock_disruption)``.
+    """
+
+    stream = RawStreamState()
+    seq_tracker = RtpSequenceTracker()
+    packets_report: list[dict[str, Any]] = []
+    frames_report: list[dict[str, Any]] = []
+    wallclock_disruption: dict[str, Any] | None = None
+
+    current_frame: RawFrameState | None = None
+    frame_order: list[int] = []
+    frame_timestamps: set[int] = set()
+    last_frame_timestamp: int | None = None
+    last_frame_capture_time: float | None = None
+    observed_rtp_deltas: list[float] = []
+
+    def _finalize_frame(frm: RawFrameState) -> dict[str, Any]:
+        if not frm.marker_seen:
+            frm.issues.append("Frame ended without RTP marker bit (M=1)")
+        field_ids = sorted(frm.observed_field_ids)
+        if len(field_ids) == 1 and field_ids[0] == 0:
+            interlace = "progressive"
+        elif len(field_ids) == 1 and field_ids[0] == 1:
+            interlace = "field_1"
+        else:
+            interlace = "progressive" if field_ids == [0] else f"fields={field_ids}"
+        summary: dict[str, Any] = {
+            "frame_index": stream.frame_count,
+            "timestamp": frm.timestamp,
+            "interlace": interlace,
+            "field_ids": field_ids,
+            "seq_range": [frm.first_seq, frm.last_seq],
+            "packet_count": frm.packet_count,
+            "total_data_bytes": frm.total_data_bytes,
+            "first_capture_time": frm.first_capture_time,
+            "last_capture_time": frm.last_capture_time,
+            "marker_seen": frm.marker_seen,
+            "min_row_number": frm.min_row_number if frm.min_row_number != 0x7FFF else 0,
+            "max_row_number": frm.max_row_number if frm.max_row_number >= 0 else 0,
+            "issues": frm.issues,
+        }
+        stream.frame_count += 1
+        return summary
+
+    for pkt in iter_rtp_packets_stream(pcap_path, port, stream_info=stream_info):
+        if not pkt.payload or len(pkt.payload) < RAW_MIN_PAYLOAD:
+            continue
+        if payload_type_filter is not None and pkt.payload_type != payload_type_filter:
+            continue
+
+        parsed = parse_raw_payload_header(pkt.payload)
+        if parsed is None:
+            continue
+        ext_seq, srd_headers, data_offset = parsed
+
+        # Compute total data bytes from SRD Lengths (always in the clear)
+        data_bytes = sum(h.length for h in srd_headers)
+
+        is_new_frame = current_frame is None or pkt.timestamp != current_frame.timestamp
+
+        if is_new_frame and current_frame is not None:
+            frames_report.append(_finalize_frame(current_frame))
+
+        # Wallclock backstep detection (same pattern as JXSV)
+        if is_new_frame and pkt.capture_time is not None:
+            if last_frame_timestamp is not None and last_frame_capture_time is not None:
+                rtp_delta = ((pkt.timestamp - last_frame_timestamp) & 0xFFFFFFFF) / 90000.0
+                if rtp_delta > 0:
+                    observed_rtp_deltas.append(rtp_delta)
+                if observed_rtp_deltas:
+                    sorted_d = sorted(observed_rtp_deltas)
+                    mid = len(sorted_d) // 2
+                    nominal_period = (
+                        sorted_d[mid]
+                        if len(sorted_d) % 2
+                        else (sorted_d[mid - 1] + sorted_d[mid]) / 2.0
+                    )
+                else:
+                    nominal_period = 1.0 / 60.0
+                threshold = (
+                    wallclock_backstep_threshold
+                    if wallclock_backstep_threshold is not None
+                    else max(0.050, 3.0 * nominal_period)
+                )
+                capture_delta = pkt.capture_time - last_frame_capture_time
+                if capture_delta < -threshold:
+                    wallclock_disruption = {
+                        "at_frame_index": stream.frame_count,
+                        "previous_timestamp": last_frame_timestamp,
+                        "current_timestamp": pkt.timestamp,
+                        "previous_capture_time": last_frame_capture_time,
+                        "current_capture_time": pkt.capture_time,
+                        "capture_delta": capture_delta,
+                        "rtp_delta": rtp_delta,
+                        "threshold": threshold,
+                    }
+                    break
+            last_frame_timestamp = pkt.timestamp
+            last_frame_capture_time = pkt.capture_time
+
+        if (
+            max_frames is not None
+            and is_new_frame
+            and pkt.timestamp not in frame_timestamps
+            and len(frame_order) >= max_frames
+        ):
+            break
+
+        if is_new_frame:
+            if pkt.timestamp not in frame_timestamps:
+                frame_timestamps.add(pkt.timestamp)
+                frame_order.append(pkt.timestamp)
+                stream.last_timestamp = pkt.timestamp
+
+            current_frame = RawFrameState(
+                timestamp=pkt.timestamp,
+                first_seq=pkt.seq,
+                last_seq=pkt.seq,
+                first_capture_time=pkt.capture_time,
+                last_capture_time=pkt.capture_time,
+            )
+
+        assert current_frame is not None
+
+        # Validate SRD headers
+        pkt_issues = _validate_raw_srd_headers(srd_headers, current_frame)
+
+        # Track extended 32-bit sequence
+        ext_seq32 = (ext_seq << 16) | pkt.seq
+        if stream.last_ext_seq32 is not None:
+            expected = (stream.last_ext_seq32 + 1) & 0xFFFFFFFF
+            if ext_seq32 != expected:
+                gap = (ext_seq32 - stream.last_ext_seq32) & 0xFFFFFFFF
+                if gap > 1:
+                    stream.issues.append(
+                        f"Extended seq gap: expected 0x{expected:08X}, got 0x{ext_seq32:08X} "
+                        f"(gap={gap - 1})"
+                    )
+        stream.last_ext_seq32 = ext_seq32
+
+        current_frame.issues.extend(pkt_issues)
+        current_frame.packet_count += 1
+        current_frame.total_data_bytes += data_bytes
+        current_frame.last_seq = pkt.seq
+        current_frame.last_capture_time = pkt.capture_time
+        if pkt.marker:
+            current_frame.marker_seen = True
+
+        stream.packet_count += 1
+        stream.total_payload_bytes += data_bytes
+        seq_tracker.feed(pkt.seq, pkt.capture_time)
+
+        packet_record: dict[str, Any] = {
+            "seq": pkt.seq,
+            "timestamp": pkt.timestamp,
+            "ssrc": pkt.ssrc,
+            "marker": pkt.marker,
+            "payload_type": pkt.payload_type,
+            "src_ip": pkt.src_ip,
+            "dst_ip": pkt.dst_ip,
+            "src_port": pkt.src_port,
+            "dst_port": pkt.dst_port,
+            "capture_time": pkt.capture_time,
+            "payload_size": len(pkt.payload),
+            "ext_elements": pkt.ext_elements,
+            "ext_seq_num": ext_seq,
+            "ext_seq32": ext_seq32,
+            "srd_headers": [
+                {
+                    "length": h.length,
+                    "field_id": h.field_id,
+                    "row_number": h.row_number,
+                    "continuation": h.continuation,
+                    "offset": h.offset,
+                }
+                for h in srd_headers
+            ],
+            "srd_count": len(srd_headers),
+            "data_bytes": data_bytes,
+            "issues": pkt_issues,
+        }
+        packets_report.append(packet_record)
+
+    if current_frame is not None:
+        frames_report.append(_finalize_frame(current_frame))
+
+    stream.seq_analysis = seq_tracker.analysis
+    return packets_report, frames_report, stream, wallclock_disruption
+
+
 def write_h26x_csv(
     csv_path: Path,
     codec: str,

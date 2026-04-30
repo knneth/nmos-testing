@@ -72,6 +72,7 @@ from ..MatroxSdpCheck import check_sdp_st2110_30
 from ..MatroxSdpCheck import check_sdp_st2110_31
 from ..MatroxSdpCheck import check_sdp_rfc6184
 from ..MatroxSdpCheck import check_sdp_rfc7798
+from ..MatroxSdpCheck import check_sdp_ipmx_usb
 
 from ..MulticastUtils import MulticastUtils, MulticastJoinError
 
@@ -939,9 +940,9 @@ class IpmxSdpTest(GenericTest):
 
             for sender in all_senders:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Sender {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp") and not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not RTP and not USB"
                                      .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
@@ -1043,9 +1044,9 @@ class IpmxSdpTest(GenericTest):
 
             for receiver in all_receivers:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Receiver {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp") and not receiver["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Receiver {} transport {} is not RTP and not USB"
                                      .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
@@ -1137,9 +1138,9 @@ class IpmxSdpTest(GenericTest):
                 device = device_map[sender["device_id"]]
                 node = node_map[device["node_id"]]
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Sender {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp") and not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not RTP and not USB"
                                      .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
@@ -1221,9 +1222,9 @@ class IpmxSdpTest(GenericTest):
 
             for receiver in all_receivers:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Receiver {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp") and not receiver["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Receiver {} transport {} is not RTP and not USB"
                                      .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
@@ -2395,6 +2396,152 @@ class IpmxSdpTest(GenericTest):
 
         print()  # Empty line at the end
         return test.PASS()
+
+    def test_14(self, test):
+        """
+        Test that the SDP transport file matches with the USB Sender, Flow and Source of the Node
+        """
+
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+        source_map = {source["id"]: source for source in self.is04_resources["sources"].values()}
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+
+        try:
+            usb_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                           and sender["flow_id"] in flow_map
+                           and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:data"
+                           and flow_map[sender["flow_id"]]["media_type"] == "application/usb"]
+
+            sender_tested = list()
+
+            for sender in usb_senders:
+
+                flow = flow_map[sender["flow_id"]]
+                source = source_map[flow["source_id"]]
+                device = device_map[sender["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # check the transport => only USB is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not USB"
+                                     .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                sender_tested.append(sender["id"])
+
+                # The sender being active it must provide an SDP transport file and be accessible
+                if "manifest_href" not in sender:
+                    return test.FAIL("Sender {} MUST provide the 'manifest_href' attribute."
+                                     .format(sender["id"]))
+
+                href = sender["manifest_href"]
+                if not href:
+                    return test.FAIL("Sender {} MUST provide a valid 'manifest_href' attribute."
+                                     .format(sender["id"]))
+
+                manifest_href_valid, manifest_href_response = self.do_request("GET", href)
+                if manifest_href_valid and manifest_href_response.status_code == 200:
+                    pass
+                elif manifest_href_valid and manifest_href_response.status_code == 404:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                     .format(sender["id"], href))
+                else:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                     .format(sender["id"], href, manifest_href_response))
+
+                # Create an SDP object and parse the text into it. There must be at least a primary
+                # media (no redundancy)
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], href, e))
+
+                # Make sure the clock matches with the Source and Node
+                clock_name = source["clock_name"]
+                clock_found = False
+
+                for clock in node["clocks"]:
+                    if clock["name"] == clock_name:
+                        clock_found = True
+                        if clock["ref_type"] == "ptp":
+                            if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
+                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                    sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                                 " do not match Node clock {}"
+                                                 .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_delay,
+                                                         sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_version, clock))
+                        else:
+                            if sdp.primary_media.ts_ref_clock_source != "localmac":
+                                return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
+                                                 .format(sender["id"],
+                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         clock))
+
+                if not clock_found:
+                    return test.FAIL("Sender {} Source {} clock name {} not found in Node clocks {}"
+                                     .format(sender["id"], source["id"], clock_name, node["clocks"]))
+
+                # Check the server address of the transport parameters matches with the SDP
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["source_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} source address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["source_ip"],
+                                             primary_transport_params["source_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                # Make sure the number of legs matches with the number of the SDP medias
+                if len(active["transport_params"]) != sdp.media_count:
+                    return test.FAIL("Sender {} legs in transport parameters {} not matching with SDP media count {}"
+                                     .format(sender["id"], len(active["transport_params"]), sdp.media_count))
+
+                # Check the SDP transport file against ST-2110 and RFC requirements
+                try:
+                    check_sdp_ipmx_usb(sdp.primary_media)
+                except SdpCheckError as e:
+                    return test.FAIL("Sender {} failed RFC 3551 check: {}".format(sender["id"], e.message))
+
+            if len(sender_tested) == 0:
+                return test.UNCLEAR("No ACTIVE USB data Sender found on the Node => PLEASE ACTIVATE"
+                                    " A SENDER to TEST")
+
+            if len(usb_senders) > 0:
+                return test.PASS()
+
+        except KeyError as ex:
+            return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
+
+        return test.UNCLEAR("No USB data Sender resources were found on the Node")
 
     def _get_sender_from_registry(self, sender_id):
         """

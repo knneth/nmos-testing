@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -1552,6 +1553,8 @@ def main() -> int:
         raise SystemExit("--max-access-units must be positive")
 
     ctx = build_context(args)
+    if ctx.timeline is not None and ctx.timeline.trace_warning:
+        print(ctx.timeline.trace_warning, file=sys.stderr)
     if ctx.encrypted:
         print("[INFO] Encryption detected — payload content is not accessible.")
         print("       NAL content checks will be marked as untestable.\n")

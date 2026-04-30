@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import re
 import shutil
 import tempfile
 import subprocess
@@ -170,6 +171,8 @@ class TimelineInfo:
     header_fields: dict[str, dict[str, Any]]
     raw_headers: list[dict[str, Any]] = field(default_factory=list)
     sampled_frames: int = 0
+    trace_warning: str | None = None
+    lossy_timestamps: set[int] = field(default_factory=set)
 
 
 @dataclass
@@ -525,6 +528,92 @@ def write_elementary_stream(nalus: list[bytes], suffix: str) -> Path:
     return stream_path
 
 
+def walk_trace_pairs(
+    report: "RtpReport",
+    raw_headers: list[dict[str, Any]],
+    nal_type_to_header_type: dict[int, str],
+    skip_timestamps: set[int] | None = None,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Pair each filtered nalus_meta entry with the next raw_headers entry of
+    the matching FFmpeg trace type.
+
+    Robust to ``trace_headers`` dropping or inserting individual trace blocks
+    (e.g. when an SEI is malformed and the BSF aborts that packet). Same-type
+    entries in ``raw_headers`` are consumed in bitstream order; NALUs whose
+    type bucket is exhausted are skipped silently.
+
+    ``skip_timestamps`` lists AU RTP timestamps known to be "lossy" — i.e.
+    AUs whose PPS/SEI/SPS were not emitted by the trace at all (slice-only
+    packets). Their nalus_meta entries are skipped without consuming bucket
+    cursors, so subsequent AUs stay aligned with raw_headers.
+
+    Mirrors the type-bucket strategy of ``correlate_headers()`` in
+    ``ipmx_parse_rtp_pcap.py``, simplified for the partial-trace case (where
+    ``correlate_headers`` raises).
+    """
+    headers_by_type: dict[str, list[dict[str, Any]]] = {}
+    for h in raw_headers:
+        headers_by_type.setdefault(h.get("type"), []).append(h)
+    cursors: dict[str, int] = {t: 0 for t in headers_by_type}
+    skip = skip_timestamps or set()
+
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    for meta in report.nalus_meta:
+        nal_type = int(meta.get("nal_type", -1))
+        hdr_type = nal_type_to_header_type.get(nal_type)
+        if hdr_type is None:
+            continue
+        ts = int(meta.get("timestamp", -1))
+        if ts in skip:
+            continue
+        bucket = headers_by_type.get(hdr_type, [])
+        cursor = cursors.get(hdr_type, 0)
+        if cursor >= len(bucket):
+            continue
+        pairs.append((meta, bucket[cursor]))
+        cursors[hdr_type] = cursor + 1
+
+    return pairs
+
+
+def find_slice_only_packets(trace_log: str) -> list[int]:
+    """Return 0-indexed positions of packets that emitted only a Slice
+    Header (no SPS/PPS/SEI/VPS trace block).
+
+    These are packets where FFmpeg's ``trace_headers`` BSF lost state
+    after a previous failure and skipped emitting trace for the
+    parameter-set / SEI NALs of THIS packet. Their elementary-stream
+    position 1:1 corresponds to a bitstream AU, so we use the index to
+    derive the lossy AU's RTP timestamp and exclude it from coverage.
+    """
+    bsf_prefix_re = re.compile(r"\[(trace_headers|AVBSFContext)\s")
+    packet_re = re.compile(r"Packet:\s*([0-9]+)\s+bytes")
+    slice_only: list[int] = []
+    pkt_idx = -1
+    has_block = False
+    for line in trace_log.splitlines():
+        if not bsf_prefix_re.search(line):
+            continue
+        if packet_re.search(line):
+            pkt_idx += 1
+            has_block = False
+            continue
+        if pkt_idx < 0:
+            continue
+        if (
+            "Sequence Parameter Set" in line
+            or "Picture Parameter Set" in line
+            or "Video Parameter Set" in line
+            or "Supplemental" in line
+        ):
+            has_block = True
+            continue
+        if "Slice Header" in line and not has_block:
+            slice_only.append(pkt_idx)
+    return slice_only
+
+
 def build_timeline(report: RtpReport, codec: str, frames: int) -> TimelineInfo | None:
     if report.encrypted:
         return None
@@ -558,11 +647,61 @@ def build_timeline(report: RtpReport, codec: str, frames: int) -> TimelineInfo |
         header_fields = {}
         for header in headers:
             header_fields.setdefault(header["type"], header["fields"])
+    trace_warning = _summarise_trace_errors(trace_log)
+    slice_only_packets = find_slice_only_packets(trace_log)
+    lossy_timestamps: set[int] = set()
+    if slice_only_packets:
+        # The elementary stream we feed FFmpeg has 1:1 packet↔AU
+        # ordering matching report.access_units.
+        au_list = report.access_units
+        for pkt_idx in slice_only_packets:
+            if 0 <= pkt_idx < len(au_list):
+                lossy_timestamps.add(au_list[pkt_idx].timestamp)
     return TimelineInfo(
         timeline=timeline,
         header_fields=header_fields,
         raw_headers=headers,
         sampled_frames=frames,
+        trace_warning=trace_warning,
+        lossy_timestamps=lossy_timestamps,
+    )
+
+
+def _summarise_trace_errors(trace_log: str) -> str | None:
+    """One-line warning when FFmpeg's trace_headers BSF reported parse
+    failures. Returns ``None`` when the trace is clean.
+
+    These markers (``Failed to read unit``, ``Invalid SEI message``,
+    ``Error applying bitstream filters``) appear once per packet that
+    the BSF couldn't fully parse — typically a malformed SEI in the
+    user's stream. Surfacing the count lets the user know that HRD
+    correlation had to recover around an FFmpeg parsing issue rather
+    than silently ignoring it.
+    """
+    failed_units = 0
+    invalid_sei = 0
+    bsf_errors = 0
+    for line in trace_log.splitlines():
+        if "Failed to read unit" in line:
+            failed_units += 1
+        elif "Invalid SEI message" in line:
+            invalid_sei += 1
+        elif "Error applying bitstream filters" in line:
+            bsf_errors += 1
+    if not (failed_units or invalid_sei or bsf_errors):
+        return None
+    parts: list[str] = []
+    if failed_units:
+        parts.append(f"{failed_units} 'Failed to read unit'")
+    if invalid_sei:
+        parts.append(f"{invalid_sei} 'Invalid SEI message'")
+    if bsf_errors:
+        parts.append(f"{bsf_errors} 'Error applying bitstream filters'")
+    return (
+        "Warning: ffmpeg trace_headers reported parse issues ("
+        + ", ".join(parts)
+        + "). HRD correlation recovered using type-partitioned matching; "
+        "field values for affected AUs may come from a neighbouring AU's SEI."
     )
 
 

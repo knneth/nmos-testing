@@ -22,6 +22,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 import argparse
 from typing import Dict, List, Tuple, Optional
@@ -107,6 +108,19 @@ class IS11TestAnalyzer:
     def get_test_result(self, test_name: str) -> Optional[TestResult]:
         """Get a test result by name"""
         return self.test_results.get(test_name)
+
+    @staticmethod
+    def _detail_tag(test_result: Optional[TestResult]) -> str:
+        """Extract a '### ... ###' tag from a test's detail string and return
+        it as a trailing fragment (' - <tag>'), or '' if absent. Used to
+        surface contextual flags (e.g. EDID validity) in failure messages.
+        """
+        if not test_result or not test_result.detail:
+            return ""
+        match = re.search(r"###\s*(.+?)\s*###", test_result.detail)
+        if not match:
+            return ""
+        return f" - {match.group(1)}"
 
     def analyze_environment(self) -> EnvironmentSpec:
         """Analyze the test environment based on provided specification or test results"""
@@ -472,7 +486,8 @@ class IS11TestAnalyzer:
                 for test_name in edid_input_tests:
                     test_result = self.get_test_result(test_name)
                     if test_result and test_result.state != TestState.PASS:
-                        failures.append(f"{test_name} must PASS for sender with inputs and EDID support. Result is {test_result.state}")
+                        failures.append(f"{test_name} must PASS for sender with inputs and EDID support. "
+                                        f"Result is {test_result.state}{self._detail_tag(test_result)}")
             else:
                 # Device does not support EDID - EDID tests should be Could Not Test
                 for test_name in edid_input_tests:
