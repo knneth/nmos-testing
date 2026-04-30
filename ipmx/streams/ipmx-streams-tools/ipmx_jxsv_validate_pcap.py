@@ -175,10 +175,19 @@ PIH_BODY_SIZE = 24
 class JXSVCodestreamInfo:
     """Key fields from the JPEG XS picture segment (VS box + PIH).
 
+    ``ppih``/``plev`` are the values from the PIH marker — what the
+    decoder actually consumes. ``box_ppih``/``box_plev`` are the values
+    declared in the ``jxpl`` sub-box of the VS box: the receiver-facing
+    capability declaration. Per RFC 9134 §3.2, these "specify limits on
+    the capabilities needed to decode", so the codestream PIH may use a
+    tighter sublevel than the declaration — exact equality must not be
+    assumed. Cross-validation between the two sources, and against
+    SDP/MIB, is performed by separate check functions.
+
     Field names and sizes per ISO/IEC 21122-1 Table A.6.
     """
-    ppih: int       # Ppih  u(16) — profile (ISO/IEC 21122-2)
-    plev: int       # Plev  u(16) — level + sublevel (ISO/IEC 21122-2)
+    ppih: int       # Ppih  u(16) — profile (ISO/IEC 21122-2), from PIH
+    plev: int       # Plev  u(16) — level + sublevel (ISO/IEC 21122-2), from PIH
     width: int      # Wf    u(16) — frame width in sample grid positions
     height: int     # Hf    u(16) — frame height in sample grid positions
     cw: int         # Cw    u(16) — precinct width (0 = image-wide)
@@ -197,6 +206,26 @@ class JXSVCodestreamInfo:
     qpih: int       # Qpih  u(4)  — inverse quantizer type
     fs: int         # Fs    u(2)  — sign handling strategy
     rm: int         # Rm    u(2)  — run mode
+    box_ppih: int | None = None  # Ppih declared in jxpl sub-box, if present
+    box_plev: int | None = None  # Plev declared in jxpl sub-box, if present
+
+
+def plev_split(plev: int) -> tuple[int, int]:
+    """Return ``(level_hi, sublevel_lo)`` — the two bytes of a Plev value.
+
+    Per ISO/IEC 21122-2, the high byte encodes the level and the low byte
+    encodes the sublevel. The level is a class declaration (no useful
+    ordering) and must exact-match across declarations. The sublevel
+    encoding is monotonic in bpp (Sublev2bpp=0x03 < 3bpp=0x04 < 4bpp=0x06
+    < 6bpp=0x08 < 9bpp=0x0C < 12bpp=0x10 < Full=0x80) so a numeric
+    comparison expresses the bpp ordering correctly.
+    """
+    return (plev >> 8) & 0xFF, plev & 0xFF
+
+
+PLEV_LO_TO_SUBLEVEL_NAME: dict[int, str] = {
+    v: k for k, v in SDP_SUBLEVEL_TO_PLEV_LO.items()
+}
 
 
 def _parse_isobmff_boxes(data: bytes) -> tuple[int | None, int | None, int]:
@@ -342,11 +371,24 @@ def parse_jxsv_codestream_header(data: bytes) -> JXSVCodestreamInfo | None:
     Per RFC 9134 §3.4, the picture segment is:
       VS box (``jpvs``) + CS box (``colr``) + codestream (SOC…EOC)
 
-    Ppih/Plev are taken from the ``jxpl`` sub-box inside the VS box when
-    present; otherwise they fall back to the PIH marker in the codestream.
-    Dimensions and coding parameters always come from the PIH.
+    Ppih/Plev are reported from two sources, kept distinct so cross-
+    validation is possible:
 
-    Returns *None* if the data is too short or unparseable.
+    * ``info.ppih`` / ``info.plev`` come from the PIH marker in the
+      codestream — what the decoder actually sees and consumes. Per
+      ISO/IEC 21122-1:2019 Annex A, the value 0 in either field means
+      "no restrictions" (the PIH abstains and the receiver should
+      consult external metadata for the actual profile/level), so
+      cross-checks must treat ``ppih == 0`` / ``plev == 0`` as
+      abstention rather than a concrete value.
+    * ``info.box_ppih`` / ``info.box_plev`` come from the ``jxpl`` sub-box
+      of the VS box when present — the receiver-facing capability
+      declaration. Per RFC 9134 §3.2 these specify *limits* on what the
+      decoder must support, so the codestream PIH may use a tighter
+      sublevel than declared (but level and profile must match).
+
+    Dimensions and coding parameters always come from the PIH. Returns
+    *None* if the data is too short or unparseable.
     """
     if len(data) < 4:
         return None
@@ -368,10 +410,8 @@ def parse_jxsv_codestream_header(data: bytes) -> JXSVCodestreamInfo | None:
     if info is None:
         return None
 
-    if box_ppih is not None and info.ppih == 0:
-        info.ppih = box_ppih
-    if box_plev is not None and info.plev == 0:
-        info.plev = box_plev
+    info.box_ppih = box_ppih
+    info.box_plev = box_plev
 
     return info
 
@@ -962,9 +1002,43 @@ def check_sdp_plev_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]:
 
 # ---------------------------------------------------------------------------
 # Codestream-based checks (PIH parsing)
+#
+# Per ISO/IEC 21122-1:2019 Annex A (PIH marker definition), Ppih=0 and Plev=0
+# in the codestream PIH have an explicit normative meaning: "no restrictions".
+# When the PIH abstains, the receiver-facing declaration in the jxpl sub-box
+# (or the SDP/MIB) is the authoritative source for the codestream's profile/
+# level. Codestream-side checks therefore fall back to the box value when the
+# PIH carries 0 — and only report 'untestable' when neither source carries a
+# value.
 # ---------------------------------------------------------------------------
 
 IPMX_REQUIRED_PPIH = 0x4A40  # High444.12
+
+
+def _effective_codestream_ppih(
+    cs: JXSVCodestreamInfo,
+) -> tuple[int | None, str]:
+    """Return ``(ppih, source_label)`` honoring the PIH=0 'no restrictions'
+    semantics from ISO/IEC 21122-1 Annex A. ``ppih`` is None if neither the
+    PIH nor the jxpl box asserts a value."""
+    if cs.ppih != 0:
+        return cs.ppih, "codestream PIH"
+    if cs.box_ppih is not None and cs.box_ppih != 0:
+        return cs.box_ppih, "jxpl box (PIH Ppih=0, no restrictions)"
+    return None, "neither PIH nor jxpl box"
+
+
+def _effective_codestream_plev(
+    cs: JXSVCodestreamInfo,
+) -> tuple[int | None, str]:
+    """Return ``(plev, source_label)`` honoring the PIH=0 'no restrictions'
+    semantics from ISO/IEC 21122-1 Annex A. ``plev`` is None if neither the
+    PIH nor the jxpl box asserts a value."""
+    if cs.plev != 0:
+        return cs.plev, "codestream PIH"
+    if cs.box_plev is not None and cs.box_plev != 0:
+        return cs.box_plev, "jxpl box (PIH Plev=0, no restrictions)"
+    return None, "neither PIH nor jxpl box"
 
 
 def check_codestream_profile(ctx: JXSVValidationContext) -> tuple[bool, str]:
@@ -973,18 +1047,29 @@ def check_codestream_profile(ctx: JXSVValidationContext) -> tuple[bool, str]:
         return untestable("Payload encrypted — codestream not accessible")
     if ctx.codestream is None:
         return untestable("Could not parse codestream header from first frame")
-    ppih = ctx.codestream.ppih
+    ppih, source = _effective_codestream_ppih(ctx.codestream)
+    if ppih is None:
+        return untestable(
+            "Codestream PIH Ppih=0 (no restrictions per ISO/IEC 21122-1 "
+            "Annex A) and no jxpl sub-box — profile cannot be determined"
+        )
     name = PPIH_TO_PROFILE_NAME.get(ppih, f"unknown(0x{ppih:04X})")
     if ppih == IPMX_REQUIRED_PPIH:
-        return True, f"Codestream Ppih=0x{ppih:04X} ({name}) — High444.12 as required"
+        return True, (
+            f"{source} Ppih=0x{ppih:04X} ({name}) — High444.12 as required"
+        )
     return False, (
-        f"Codestream Ppih=0x{ppih:04X} ({name}) — "
+        f"{source} Ppih=0x{ppih:04X} ({name}) — "
         f"expected High444.12 (0x{IPMX_REQUIRED_PPIH:04X})"
     )
 
 
 def check_codestream_ppih_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]:
-    """Codestream Ppih SHALL match the profile declared in SDP."""
+    """Codestream Ppih SHALL match the profile declared in SDP.
+
+    Honors PIH=0 'no restrictions' (ISO/IEC 21122-1 Annex A): when the PIH
+    abstains, the jxpl box is consulted instead.
+    """
     if ctx.encrypted:
         return untestable("Payload encrypted — codestream not accessible")
     if ctx.codestream is None:
@@ -995,23 +1080,35 @@ def check_codestream_ppih_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]
         return untestable(
             f"Cannot map SDP profile='{ctx.sdp.profile_str}' to a Ppih value"
         )
-    cs_ppih = ctx.codestream.ppih
+    cs_ppih, source = _effective_codestream_ppih(ctx.codestream)
+    if cs_ppih is None:
+        return untestable(
+            "Codestream PIH Ppih=0 (no restrictions) and no jxpl sub-box — "
+            "nothing to compare against SDP"
+        )
     sdp_ppih = ctx.sdp.ppih
     cs_name = PPIH_TO_PROFILE_NAME.get(cs_ppih, f"0x{cs_ppih:04X}")
     sdp_name = PPIH_TO_PROFILE_NAME.get(sdp_ppih, f"0x{sdp_ppih:04X}")
     if cs_ppih == sdp_ppih:
         return True, (
-            f"Codestream Ppih=0x{cs_ppih:04X} ({cs_name}) matches "
+            f"{source} Ppih=0x{cs_ppih:04X} ({cs_name}) matches "
             f"SDP profile='{ctx.sdp.profile_str}'"
         )
     return False, (
-        f"Codestream Ppih=0x{cs_ppih:04X} ({cs_name}) differs from "
+        f"{source} Ppih=0x{cs_ppih:04X} ({cs_name}) differs from "
         f"SDP profile='{ctx.sdp.profile_str}' (→ Ppih=0x{sdp_ppih:04X}, {sdp_name})"
     )
 
 
 def check_codestream_plev_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]:
-    """Codestream Plev SHALL match the level+sublevel declared in SDP."""
+    """Codestream Plev level SHALL match SDP level; codestream sublevel SHALL
+    be no looser (no higher bpp) than the sublevel declared in SDP.
+
+    Per RFC 9134 §3.2, Ppih/Plev "specify limits on the capabilities needed
+    to decode" — the codestream may use a tighter sublevel than declared.
+    Honors PIH=0 'no restrictions' (ISO/IEC 21122-1 Annex A): when the PIH
+    abstains, the jxpl box is consulted and compared exactly.
+    """
     if ctx.encrypted:
         return untestable("Payload encrypted — codestream not accessible")
     if ctx.codestream is None:
@@ -1023,22 +1120,45 @@ def check_codestream_plev_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]
             f"Cannot map SDP level='{ctx.sdp.level_str}' "
             f"sublevel='{ctx.sdp.sublevel_str}' to a Plev value"
         )
-    cs_plev = ctx.codestream.plev
-    sdp_plev = ctx.sdp.plev
-    if cs_plev == sdp_plev:
+    cs_plev, source = _effective_codestream_plev(ctx.codestream)
+    if cs_plev is None:
+        return untestable(
+            "Codestream PIH Plev=0 (no restrictions) and no jxpl sub-box — "
+            "nothing to compare against SDP"
+        )
+    cs_lvl, cs_sub = plev_split(cs_plev)
+    sdp_lvl, sdp_sub = plev_split(ctx.sdp.plev)
+    cs_sub_name = PLEV_LO_TO_SUBLEVEL_NAME.get(cs_sub, f"0x{cs_sub:02X}")
+    if cs_lvl != sdp_lvl:
+        return False, (
+            f"{source} Plev=0x{cs_plev:04X} level high byte 0x{cs_lvl:02X} "
+            f"differs from SDP level='{ctx.sdp.level_str}' (→ 0x{sdp_lvl:02X})"
+        )
+    if cs_sub > sdp_sub:
+        return False, (
+            f"{source} Plev=0x{cs_plev:04X} sublevel 0x{cs_sub:02X} "
+            f"({cs_sub_name}) exceeds SDP sublevel='{ctx.sdp.sublevel_str}' "
+            f"(→ 0x{sdp_sub:02X}) — codestream is looser than the declared limit"
+        )
+    if cs_sub == sdp_sub:
         return True, (
-            f"Codestream Plev=0x{cs_plev:04X} matches "
+            f"{source} Plev=0x{cs_plev:04X} matches "
             f"SDP level='{ctx.sdp.level_str}' sublevel='{ctx.sdp.sublevel_str}'"
         )
-    return False, (
-        f"Codestream Plev=0x{cs_plev:04X} differs from "
-        f"SDP level='{ctx.sdp.level_str}' sublevel='{ctx.sdp.sublevel_str}' "
-        f"(→ Plev=0x{sdp_plev:04X})"
+    return True, (
+        f"{source} Plev=0x{cs_plev:04X} matches SDP level="
+        f"'{ctx.sdp.level_str}' and tightens sublevel from "
+        f"'{ctx.sdp.sublevel_str}' (0x{sdp_sub:02X}) to {cs_sub_name} "
+        f"(0x{cs_sub:02X}) — within RFC 9134 §3.2 limits"
     )
 
 
 def check_codestream_ppih_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]:
-    """Codestream Ppih SHALL match the Ppih in MIB 0x0008."""
+    """Codestream Ppih SHALL match the Ppih in MIB 0x0008.
+
+    Honors PIH=0 'no restrictions' (ISO/IEC 21122-1 Annex A): when the PIH
+    abstains, the jxpl box is consulted instead.
+    """
     if ctx.encrypted:
         return untestable("Payload encrypted — codestream not accessible")
     if ctx.codestream is None:
@@ -1047,7 +1167,12 @@ def check_codestream_ppih_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]
         return untestable("No Sender Reports available")
     if not _any_mib_0x0008(ctx):
         return untestable("No MIB 0x0008 present — cannot verify Ppih against codestream")
-    cs_ppih = ctx.codestream.ppih
+    cs_ppih, source = _effective_codestream_ppih(ctx.codestream)
+    if cs_ppih is None:
+        return untestable(
+            "Codestream PIH Ppih=0 (no restrictions) and no jxpl sub-box — "
+            "nothing to compare against MIB"
+        )
     cs_name = PPIH_TO_PROFILE_NAME.get(cs_ppih, f"0x{cs_ppih:04X}")
     mismatches = 0
     checked = 0
@@ -1065,16 +1190,24 @@ def check_codestream_ppih_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]
     if mismatches:
         return False, (
             f"{mismatches}/{checked} SR(s): MIB Ppih differs from "
-            f"codestream Ppih=0x{cs_ppih:04X} ({cs_name})"
+            f"{source} Ppih=0x{cs_ppih:04X} ({cs_name})"
         )
     return True, (
-        f"MIB Ppih=0x{cs_ppih:04X} ({cs_name}) matches codestream "
+        f"MIB Ppih=0x{cs_ppih:04X} ({cs_name}) matches {source} "
         f"across {checked} SR(s)"
     )
 
 
 def check_codestream_plev_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]:
-    """Codestream Plev SHALL match the Plev in MIB 0x0008."""
+    """Codestream Plev level SHALL match MIB Plev level; codestream sublevel
+    SHALL be no looser (no higher bpp) than the sublevel declared in MIB.
+
+    Per RFC 9134 §3.2, Ppih/Plev "specify limits on the capabilities needed
+    to decode"; the MIB is a receiver-facing declaration so the codestream
+    may use a tighter sublevel than the MIB advertises. Honors PIH=0 'no
+    restrictions' (ISO/IEC 21122-1 Annex A): when the PIH abstains, the
+    jxpl box is consulted instead.
+    """
     if ctx.encrypted:
         return untestable("Payload encrypted — codestream not accessible")
     if ctx.codestream is None:
@@ -1083,26 +1216,211 @@ def check_codestream_plev_vs_mib(ctx: JXSVValidationContext) -> tuple[bool, str]
         return untestable("No Sender Reports available")
     if not _any_mib_0x0008(ctx):
         return untestable("No MIB 0x0008 present — cannot verify Plev against codestream")
-    cs_plev = ctx.codestream.plev
-    mismatches = 0
+    cs_plev, source = _effective_codestream_plev(ctx.codestream)
+    if cs_plev is None:
+        return untestable(
+            "Codestream PIH Plev=0 (no restrictions) and no jxpl sub-box — "
+            "nothing to compare against MIB"
+        )
+    cs_lvl, cs_sub = plev_split(cs_plev)
+    cs_sub_name = PLEV_LO_TO_SUBLEVEL_NAME.get(cs_sub, f"0x{cs_sub:02X}")
+    level_mismatches = 0
+    sublevel_violations = 0
     checked = 0
+    sample_mib_plev: int | None = None
     for sr in ctx.sender_reports:
         blk = find_media_block(sr, 0x0008)
         if blk is None or blk.decoded is None:
             continue
         mib_plev = blk.decoded.get("plev")
-        if mib_plev is not None:
-            checked += 1
-            if mib_plev != cs_plev:
-                mismatches += 1
+        if mib_plev is None:
+            continue
+        checked += 1
+        if sample_mib_plev is None:
+            sample_mib_plev = mib_plev
+        mib_lvl, mib_sub = plev_split(mib_plev)
+        if mib_lvl != cs_lvl:
+            level_mismatches += 1
+        if cs_sub > mib_sub:
+            sublevel_violations += 1
     if checked == 0:
         return untestable("MIB 0x0008 present but no Plev field found")
-    if mismatches:
+    if level_mismatches:
         return False, (
-            f"{mismatches}/{checked} SR(s): MIB Plev differs from "
-            f"codestream Plev=0x{cs_plev:04X}"
+            f"{level_mismatches}/{checked} SR(s): MIB Plev level high byte "
+            f"differs from {source} Plev=0x{cs_plev:04X} (level=0x{cs_lvl:02X})"
         )
-    return True, f"MIB Plev=0x{cs_plev:04X} matches codestream across {checked} SR(s)"
+    if sublevel_violations:
+        return False, (
+            f"{sublevel_violations}/{checked} SR(s): {source} sublevel "
+            f"0x{cs_sub:02X} ({cs_sub_name}) exceeds MIB-advertised sublevel "
+            f"— codestream is looser than the declared limit"
+        )
+    if sample_mib_plev is not None and sample_mib_plev == cs_plev:
+        return True, (
+            f"MIB Plev=0x{cs_plev:04X} matches {source} across {checked} SR(s)"
+        )
+    return True, (
+        f"{source} Plev=0x{cs_plev:04X} matches MIB level and tightens "
+        f"sublevel within RFC 9134 §3.2 limits across {checked} SR(s)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# jxpl box ↔ PIH ↔ SDP cross-validation
+# ---------------------------------------------------------------------------
+
+def check_jxpl_present(ctx: JXSVValidationContext) -> tuple[bool, str]:
+    """The VS box SHOULD contain a ``jxpl`` sub-box advertising Ppih/Plev
+    (RFC 9134 §3.4 + ISO/IEC 21122-3)."""
+    if ctx.encrypted:
+        return untestable("Payload encrypted — codestream not accessible")
+    if ctx.codestream is None:
+        return untestable("Could not parse codestream header from first frame")
+    if ctx.codestream.box_ppih is None and ctx.codestream.box_plev is None:
+        return False, (
+            "No jxpl sub-box found in the VS box — receivers cannot read the "
+            "advertised profile/level without parsing the codestream PIH"
+        )
+    return True, (
+        f"jxpl sub-box present with Ppih=0x{ctx.codestream.box_ppih:04X} "
+        f"Plev=0x{ctx.codestream.box_plev:04X}"
+    )
+
+
+def check_jxpl_vs_pih_consistency(ctx: JXSVValidationContext) -> tuple[bool, str]:
+    """The jxpl sub-box SHALL agree with the codestream PIH on profile and
+    level; the PIH sublevel SHALL be no looser than the jxpl-advertised
+    sublevel (RFC 9134 §3.2 — boxes are limits).
+
+    PIH Ppih=0 and PIH Plev=0 mean "no restrictions" per ISO/IEC 21122-1
+    Annex A — the PIH is abstaining on that dimension and there is nothing
+    to cross-check against the box for it.
+    """
+    if ctx.encrypted:
+        return untestable("Payload encrypted — codestream not accessible")
+    if ctx.codestream is None:
+        return untestable("Could not parse codestream header from first frame")
+    box_ppih = ctx.codestream.box_ppih
+    box_plev = ctx.codestream.box_plev
+    if box_ppih is None or box_plev is None:
+        return untestable("jxpl sub-box absent — nothing to cross-check against PIH")
+
+    pih_ppih = ctx.codestream.ppih
+    pih_plev = ctx.codestream.plev
+    pih_lvl, pih_sub = plev_split(pih_plev)
+    box_lvl, box_sub = plev_split(box_plev)
+    pih_sub_name = PLEV_LO_TO_SUBLEVEL_NAME.get(pih_sub, f"0x{pih_sub:02X}")
+    box_sub_name = PLEV_LO_TO_SUBLEVEL_NAME.get(box_sub, f"0x{box_sub:02X}")
+    pih_ppih_name = PPIH_TO_PROFILE_NAME.get(pih_ppih, f"0x{pih_ppih:04X}")
+    box_ppih_name = PPIH_TO_PROFILE_NAME.get(box_ppih, f"0x{box_ppih:04X}")
+
+    issues: list[str] = []
+    abstentions: list[str] = []
+
+    if pih_ppih == 0:
+        abstentions.append("Ppih")
+    elif box_ppih != pih_ppih:
+        issues.append(
+            f"Ppih: jxpl=0x{box_ppih:04X} ({box_ppih_name}) vs "
+            f"PIH=0x{pih_ppih:04X} ({pih_ppih_name})"
+        )
+
+    if pih_plev == 0:
+        abstentions.append("Plev")
+    else:
+        if box_lvl != pih_lvl:
+            issues.append(
+                f"level: jxpl=0x{box_lvl:02X} vs PIH=0x{pih_lvl:02X}"
+            )
+        if pih_sub > box_sub:
+            issues.append(
+                f"sublevel: PIH=0x{pih_sub:02X} ({pih_sub_name}) is looser than "
+                f"jxpl=0x{box_sub:02X} ({box_sub_name})"
+            )
+
+    if issues:
+        return False, "jxpl/PIH disagreement — " + "; ".join(issues)
+
+    abstain_note = (
+        f" (PIH abstains on {'/'.join(abstentions)} per ISO/IEC 21122-1 Annex A)"
+        if abstentions else ""
+    )
+    if pih_plev != 0 and pih_sub == box_sub and not abstentions:
+        return True, (
+            f"jxpl Ppih=0x{box_ppih:04X} Plev=0x{box_plev:04X} matches PIH exactly"
+        )
+    if pih_plev != 0 and pih_sub != box_sub:
+        return True, (
+            f"jxpl Ppih=0x{box_ppih:04X} Plev=0x{box_plev:04X}; PIH tightens "
+            f"sublevel to {pih_sub_name} (0x{pih_sub:02X}) within RFC 9134 §3.2 limits"
+            f"{abstain_note}"
+        )
+    return True, (
+        f"jxpl Ppih=0x{box_ppih:04X} Plev=0x{box_plev:04X}{abstain_note}"
+    )
+
+
+def check_jxpl_ppih_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]:
+    """jxpl Ppih SHALL match the profile declared in SDP (exact)."""
+    if ctx.encrypted:
+        return untestable("Payload encrypted — codestream not accessible")
+    if ctx.codestream is None:
+        return untestable("Could not parse codestream header from first frame")
+    if ctx.codestream.box_ppih is None:
+        return untestable("jxpl sub-box absent — no Ppih to verify against SDP")
+    if ctx.sdp is None:
+        return untestable("No SDP transport file provided (use --sdp)")
+    if ctx.sdp.ppih is None:
+        return untestable(
+            f"Cannot map SDP profile='{ctx.sdp.profile_str}' to a Ppih value"
+        )
+    box_ppih = ctx.codestream.box_ppih
+    sdp_ppih = ctx.sdp.ppih
+    box_name = PPIH_TO_PROFILE_NAME.get(box_ppih, f"0x{box_ppih:04X}")
+    sdp_name = PPIH_TO_PROFILE_NAME.get(sdp_ppih, f"0x{sdp_ppih:04X}")
+    if box_ppih == sdp_ppih:
+        return True, (
+            f"jxpl Ppih=0x{box_ppih:04X} ({box_name}) matches "
+            f"SDP profile='{ctx.sdp.profile_str}'"
+        )
+    return False, (
+        f"jxpl Ppih=0x{box_ppih:04X} ({box_name}) differs from "
+        f"SDP profile='{ctx.sdp.profile_str}' (→ Ppih=0x{sdp_ppih:04X}, {sdp_name})"
+    )
+
+
+def check_jxpl_plev_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]:
+    """jxpl Plev SHALL match the level+sublevel declared in SDP (exact).
+
+    The jxpl sub-box is the receiver-facing capability declaration, so it
+    must match the SDP advertisement on both bytes.
+    """
+    if ctx.encrypted:
+        return untestable("Payload encrypted — codestream not accessible")
+    if ctx.codestream is None:
+        return untestable("Could not parse codestream header from first frame")
+    if ctx.codestream.box_plev is None:
+        return untestable("jxpl sub-box absent — no Plev to verify against SDP")
+    if ctx.sdp is None:
+        return untestable("No SDP transport file provided (use --sdp)")
+    if ctx.sdp.plev is None:
+        return untestable(
+            f"Cannot map SDP level='{ctx.sdp.level_str}' "
+            f"sublevel='{ctx.sdp.sublevel_str}' to a Plev value"
+        )
+    box_plev = ctx.codestream.box_plev
+    sdp_plev = ctx.sdp.plev
+    if box_plev == sdp_plev:
+        return True, (
+            f"jxpl Plev=0x{box_plev:04X} matches SDP level="
+            f"'{ctx.sdp.level_str}' sublevel='{ctx.sdp.sublevel_str}'"
+        )
+    return False, (
+        f"jxpl Plev=0x{box_plev:04X} differs from SDP level="
+        f"'{ctx.sdp.level_str}' sublevel='{ctx.sdp.sublevel_str}' "
+        f"(→ Plev=0x{sdp_plev:04X})"
+    )
 
 
 def check_codestream_dimensions_vs_sdp(ctx: JXSVValidationContext) -> tuple[bool, str]:
@@ -1490,17 +1808,35 @@ def build_requirements(ctx: JXSVValidationContext) -> list[Requirement]:
         "Codestream Ppih SHALL match the profile declared in SDP.",
         lambda c=ctx: check_codestream_ppih_vs_sdp(c))
     add("CS-PLEV-SDP", "shall",
-        "Codestream Plev SHALL match the level+sublevel declared in SDP.",
+        "Codestream Plev level SHALL match SDP level; codestream sublevel "
+        "SHALL be no looser than SDP sublevel (RFC 9134 §3.2 limits).",
         lambda c=ctx: check_codestream_plev_vs_sdp(c))
     add("CS-PPIH-MIB", "shall",
         "Codestream Ppih SHALL match the Ppih in MIB 0x0008.",
         lambda c=ctx: check_codestream_ppih_vs_mib(c))
     add("CS-PLEV-MIB", "shall",
-        "Codestream Plev SHALL match the Plev in MIB 0x0008.",
+        "Codestream Plev level SHALL match MIB Plev level; codestream "
+        "sublevel SHALL be no looser than MIB sublevel (RFC 9134 §3.2 limits).",
         lambda c=ctx: check_codestream_plev_vs_mib(c))
     add("CS-DIM-SDP", "shall",
         "Codestream width/height SHALL match SDP width/height.",
         lambda c=ctx: check_codestream_dimensions_vs_sdp(c))
+
+    # --- jxpl box ↔ PIH ↔ SDP cross-validation (RFC 9134 §3.2/§3.4) ---
+    add("JXPL-PRESENT", "should",
+        "VS box SHOULD contain a jxpl sub-box advertising Ppih/Plev "
+        "(RFC 9134 §3.4 + ISO/IEC 21122-3).",
+        lambda c=ctx: check_jxpl_present(c))
+    add("JXPL-PIH-CONSISTENT", "shall",
+        "jxpl sub-box SHALL agree with the codestream PIH on profile and "
+        "level; PIH sublevel SHALL be no looser than jxpl sublevel.",
+        lambda c=ctx: check_jxpl_vs_pih_consistency(c))
+    add("JXPL-PPIH-SDP", "shall",
+        "jxpl Ppih SHALL match the profile declared in SDP (exact).",
+        lambda c=ctx: check_jxpl_ppih_vs_sdp(c))
+    add("JXPL-PLEV-SDP", "shall",
+        "jxpl Plev SHALL match the level+sublevel declared in SDP (exact).",
+        lambda c=ctx: check_jxpl_plev_vs_sdp(c))
 
     # --- TR-10-11/TR-10-1: SR-to-frame cross-validation ---
     add("TR-10-1-SR-MAP", "shall",
