@@ -2473,6 +2473,10 @@ class IS1101Test(GenericTest):
 
                         print("State: {}".format(state))
 
+                # Note that the modification of the EDID preferred mode based on the constraints is
+                # required only if the sender state is active_constraints_violation. A device that
+                # use an internal scaler to comply with the constraints is not required to modify 
+                # its EDID which sometime is the only interoperable choice (ex. Windows 11).
                 if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
                     print(f"CHECK THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate}")
                     answer = input("Press Enter if EDID is valid, type NO otherwise: ")
@@ -2847,6 +2851,10 @@ class IS1101Test(GenericTest):
                         
                         print("State: {}".format(state))
 
+                # Note that the modification of the EDID preferred mode based on the constraints is
+                # required only if the sender state is active_constraints_violation. A device that
+                # use an internal scaler to comply with the constraints is not required to modify 
+                # its EDID which sometime is the only interoperable choice (ex. Windows 11).
                 if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
                     print(f"CHECK THE SOURCE EDID for a preferred sample rate of {another_sample_rate}")
                     answer = input("Press Enter if EDID is valid, type NO otherwise: ")
