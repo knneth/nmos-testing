@@ -526,6 +526,7 @@ def write_analysis_csv(
     # simulation gets skipped → CSV HRD columns stay blank. Fixed here so
     # ipmx_validate_hrd_h264.extract_sei_per_au_h264 is used for codec=h264.
     cpb_by_ts: dict[int, _CpbInfo] = {}
+    bp_map: dict[int, Any] = {}
     if hrd and timeline and timeline.raw_headers:
         if codec == "h264":
             bp_map, pt_map, _ = ipmx_validate_hrd_h264.extract_sei_per_au_h264(
@@ -550,6 +551,21 @@ def write_analysis_csv(
                     overflow=ar.overflow,
                     underflow=ar.underflow,
                 )
+
+    # ---- 6b. Per-AU initial_cpb_removal_delay_offset (H.264 §C.1.2 / H.265 §C.2.4.1) ----
+    # The buffering-period SEI is only attached to RAP AUs. Per the CVS-wide
+    # constraint (sum of delay + offset is constant), the offset declared at
+    # any BP applies to subsequent AUs until the next BP. Carry it forward
+    # so every AU row shows the active offset value. Raw units are 90 kHz
+    # ticks; the CSV exports nanoseconds to match the other timing columns.
+    removal_delay_offset_ticks_by_ts: dict[int, int] = {}
+    current_offset_ticks: int | None = None
+    for au in report.access_units:
+        bp = bp_map.get(au.timestamp)
+        if bp is not None:
+            current_offset_ticks = int(bp.init_cpb_removal_delay_offset)
+        if current_offset_ticks is not None:
+            removal_delay_offset_ticks_by_ts[au.timestamp] = current_offset_ticks
 
     # ---- 7. Write the CSV ----
     fieldnames = [
@@ -585,6 +601,7 @@ def write_analysis_csv(
         "HRD arr ns",
         "HRD fin ns",
         "HRD rem ns",
+        "rem delay offset ns",
         "CPB at rem bits",
         "CPB after bits",
         "overflow",
@@ -671,6 +688,10 @@ def write_analysis_csv(
                 ),
                 "HRD rem ns": (
                     int(cpb.cpb_removal_time * 1_000_000_000) if cpb else ""
+                ),
+                "rem delay offset ns": (
+                    int(removal_delay_offset_ticks_by_ts[ts] * 1_000_000_000 / 90000)
+                    if ts in removal_delay_offset_ticks_by_ts else ""
                 ),
                 "CPB at rem bits": (
                     f"{cpb.cpb_occupancy_at_removal:.0f}" if cpb else ""

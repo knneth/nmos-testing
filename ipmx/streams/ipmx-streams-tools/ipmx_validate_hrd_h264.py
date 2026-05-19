@@ -866,6 +866,73 @@ def check_pcap_timing(ctx: ValidationContext) -> list[RequirementResult]:
              "Need ≥2 AUs in HRD trace for eq C-3 schedule comparison",
              testable=False)
 
+    # H264-HRD-EDELAY-BP0: BP 0's symmetric-CPB E_delay reconstructed
+    # from the HRD parameters (CpbSize / BitRate − init_cpb_removal_delay)
+    # should equal init_cpb_removal_delay_offset. Equivalently, BP 0's
+    # `delay + offset` should equal the canonical CPB transit time
+    # CpbSize / BitRate. Cross-validates the SPS VUI HRD parameters
+    # against the BP 0 buffering-period SEI; if they disagree, one of
+    # the two declarations is internally inconsistent. 1-tick tolerance
+    # for integer-rounding noise.
+    if bp_map and hrd.bit_rate > 0:
+        bp_first = bp_map[next(iter(bp_map))]
+        delay_ticks = bp_first.init_cpb_removal_delay
+        offset_ticks = bp_first.init_cpb_removal_delay_offset
+        cpb_transit_ticks = int(round(float(hrd.cpb_size) * 90000 / float(hrd.bit_rate)))
+        our_edelay_ticks = cpb_transit_ticks - delay_ticks
+        diff_ticks = our_edelay_ticks - offset_ticks
+        if abs(diff_ticks) <= 1:
+            _add("H264-HRD-EDELAY-BP0", "should", True,
+                 f"BP 0 init_cpb_removal_delay_offset={offset_ticks} ticks "
+                 f"({offset_ticks/90000*1000:.3f}ms) matches "
+                 f"CpbSize/BitRate − init_cpb_removal_delay "
+                 f"= {cpb_transit_ticks} − {delay_ticks} = "
+                 f"{our_edelay_ticks} ticks within 1-tick tolerance")
+        else:
+            _add("H264-HRD-EDELAY-BP0", "should", False,
+                 f"BP 0 init_cpb_removal_delay_offset={offset_ticks} ticks "
+                 f"differs from CpbSize/BitRate − init_cpb_removal_delay "
+                 f"= {cpb_transit_ticks} − {delay_ticks} = "
+                 f"{our_edelay_ticks} ticks by {diff_ticks:+d} ticks "
+                 f"(> 1-tick tolerance)")
+    else:
+        _add("H264-HRD-EDELAY-BP0", "should", True,
+             "No BP SEI or no HRD BitRate — cannot reconstruct E_delay",
+             testable=False)
+
+    # H264-HRD-BP-SUM-INVARIANT: H.264 §C.1.2 — over the entire CVS,
+    # `init_cpb_removal_delay + init_cpb_removal_delay_offset` shall be
+    # constant for each SchedSelIdx. The spec is SHALL; we surface as
+    # SHOULD with a 1-tick (90 kHz) tolerance for integer-rounding noise.
+    if len(bp_map) >= 2:
+        bp_list = list(bp_map.values())
+        anchor_sum = bp_list[0].init_cpb_removal_delay + bp_list[0].init_cpb_removal_delay_offset
+        bad_bps: list[tuple[int, int]] = []
+        for bp in bp_list[1:]:
+            bp_sum = bp.init_cpb_removal_delay + bp.init_cpb_removal_delay_offset
+            if abs(bp_sum - anchor_sum) > 1:
+                bad_bps.append((bp.rtp_timestamp, bp_sum))
+        if bad_bps:
+            worst_ts, worst_sum = bad_bps[0]
+            _add("H264-HRD-BP-SUM-INVARIANT", "should", False,
+                 f"{len(bad_bps)}/{len(bp_list) - 1} BPs after the first "
+                 f"violate CVS-constant sum (BP 0 sum={anchor_sum} ticks "
+                 f"= {anchor_sum/90000*1000:.3f}ms; BP at ts={worst_ts} "
+                 f"sum={worst_sum} ticks, diff "
+                 f"{worst_sum - anchor_sum:+d} ticks)")
+        else:
+            _add("H264-HRD-BP-SUM-INVARIANT", "should", True,
+                 f"All {len(bp_list)} BPs report "
+                 f"init_cpb_removal_delay + offset = {anchor_sum} ticks "
+                 f"({anchor_sum/90000*1000:.3f}ms) within 1-tick tolerance")
+    elif bp_map:
+        _add("H264-HRD-BP-SUM-INVARIANT", "should", True,
+             "Only 1 BP in stream — invariant trivially satisfied",
+             testable=False)
+    else:
+        _add("H264-HRD-BP-SUM-INVARIANT", "should", True,
+             "No BP SEI data — cannot verify invariant", testable=False)
+
     return results
 
 
