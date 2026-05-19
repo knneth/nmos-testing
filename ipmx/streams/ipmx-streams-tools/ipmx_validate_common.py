@@ -189,6 +189,7 @@ class ValidationContext:
     sampling: str | None = None
     bit_depth: int | None = None
     sdp_media: MediaDescriptor | None = None
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None" = None
     encrypted: bool = False
     allow_superset_profile: bool = False
 
@@ -301,6 +302,68 @@ def parse_sender_reports(
             )
     reports.sort(key=lambda sr: sr.capture_time)
     return reports
+
+
+def filter_capture_boundary_orphan_srs(
+    unknown_srs: list,
+    au_timestamps: set[int],
+    last_au_first_packet_time: float,
+) -> list:
+    """Filter SRs whose ``rtp_timestamp`` doesn't match any AU on the wire.
+
+    Two end-of-capture failure modes are *not* real conformance failures —
+    they are artifacts of where the packet capture happened to start and
+    stop:
+
+    1. **Trailing-tail orphans** — kernel-level captures (e.g. tcpdump on
+       loopback) sometimes lose the last few media packets at SIGINT
+       because the BPF buffer hasn't yet drained.  The SR for those
+       missing AUs is captured (SRs fire ~50 µs before their AU's first
+       packet, so they get into the BPF queue earlier) while the AU
+       packets themselves don't.  These show up as SRs whose
+       ``rtp_timestamp`` is *past* the last captured AU's
+       ``rtp_timestamp`` (signed 32-bit delta > 0).
+
+    2. **Leading-head orphans** — symmetric case at capture start: the
+       very first media packets of a stream might land before tcpdump
+       attaches, while an SR fires earlier and lands inside the capture
+       window. These have ``rtp_timestamp`` *before* the earliest
+       captured AU's ``rtp_timestamp``.
+
+    A real conformance failure is an SR whose ``rtp_timestamp`` falls
+    *within* the captured AU range yet doesn't match — e.g. a skipped
+    frame in the middle of the stream — which is what TR-10-15c-135b /
+    TR-10-15b-146b actually try to detect. This helper preserves that
+    distinction.
+
+    Compares using signed 32-bit deltas to handle RTP-timestamp
+    wraparound correctly (RFC 3550 random base + 32-bit counter).
+    """
+    if not unknown_srs or not au_timestamps:
+        return unknown_srs
+    sorted_aus = sorted(au_timestamps)
+    first_au_ts = sorted_aus[0]
+    last_au_ts  = sorted_aus[-1]
+
+    def signed32(a: int, b: int) -> int:
+        d = (a - b) & 0xFFFFFFFF
+        return d - 0x1_0000_0000 if d & 0x8000_0000 else d
+
+    real = []
+    for sr in unknown_srs:
+        # Past the captured range (trailing tail) — capture lost the AU.
+        if signed32(sr.rtp_timestamp, last_au_ts) > 0:
+            continue
+        # Before the captured range (leading head) — capture started late.
+        if signed32(sr.rtp_timestamp, first_au_ts) < 0:
+            continue
+        # Inside the captured range. Apply the existing capture-time guard
+        # so post-stream SRs (e.g. a final SR fired after the last AU's
+        # first packet wallclock) are still excluded.
+        if sr.capture_time > last_au_first_packet_time:
+            continue
+        real.append(sr)
+    return real
 
 
 def infer_rtp_port(pcap_path: Path, codec: str) -> int | None:
@@ -1509,6 +1572,184 @@ def check_sdp_ipmx_fmtp(
     if not sdp_media.ipmx:
         return False, "SDP a=fmtp line does not contain the IPMX keyword"
     return True, "SDP a=fmtp contains the IPMX keyword"
+
+
+def _is_ipv4_multicast(addr: str) -> bool:
+    """Return True if `addr` is a dotted-quad in 224.0.0.0/4 (RFC 5771)."""
+    if not addr:
+        return False
+    try:
+        first = int(addr.split(".", 1)[0])
+    except (ValueError, IndexError):
+        return False
+    return 224 <= first <= 239
+
+
+def _is_ipv6_multicast(addr: str) -> bool:
+    """Return True if `addr` is in ff::/8 (RFC 4291 §2.7)."""
+    if not addr:
+        return False
+    return addr.lower().startswith("ff")
+
+
+def _is_wildcard(addr: str, ipv6: bool) -> bool:
+    """Wildcard ("any") source addresses on a multicast m= block — never
+    routable under IGMPv3 (S,G) since the network can't compute RPF for
+    them. Loopback (127.x / ::1) is permitted: it is the conventional
+    sender address for single-host loopback test fixtures, and the only
+    way the (S,G) state diverges from production is at the routing layer,
+    which receivers parsing PCAPs don't exercise."""
+    if not addr:
+        return True
+    if ipv6:
+        return addr in ("::", "0:0:0:0:0:0:0:0")
+    return addr == "0.0.0.0"
+
+
+def check_sdp_multicast_source_filter(
+    sdp_media: MediaDescriptor | None,
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """SDP `a=source-filter:` SHALL be present on multicast streams
+    (TR-10-9 §17 / RFC 4570). Skipped on unicast.
+
+    The filter's *destination* SHALL match the m= block's `c=` connection
+    address. The filter's *source* SHALL NOT be the wildcard ("any")
+    address (0.0.0.0 / ::) — IGMPv3 (S,G) joins can never route from
+    a wildcard source. Loopback (127.x / ::1) is permitted: single-host
+    loopback test fixtures legitimately advertise a loopback sender, and
+    receivers parsing PCAPs don't exercise the routing layer where the
+    SSM RPF check would otherwise reject loopback.
+
+    ST 2110-10 §8.4 expresses the broader real-outgoing-interface intent
+    at SHOULD severity; TR-10-9 hardens to SHALL for the wildcard case,
+    which is what this check enforces.
+    """
+    if sdp_media is None:
+        return untestable("No SDP provided")
+
+    dst = sdp_media.connection_address
+    is_v6 = bool(getattr(sdp_media, "is_connection_ipv6", False))
+    if not dst:
+        return untestable("No connection address in SDP m= block")
+
+    is_mc = _is_ipv6_multicast(dst) if is_v6 else _is_ipv4_multicast(dst)
+    if not is_mc:
+        return untestable(
+            f"unicast destination {dst} — RFC 4570 source-filter N/A"
+        )
+
+    sf_dst = getattr(sdp_media, "source_filter_dst_address", "") or ""
+    sf_src = getattr(sdp_media, "source_filter_src_address", "") or ""
+    if not sf_src:
+        return False, (
+            f"SDP a=source-filter missing on multicast destination {dst} "
+            f"(TR-10-9 §17 / RFC 4570 SHALL)"
+        )
+    if sf_dst and sf_dst != dst:
+        return False, (
+            f"SDP a=source-filter destination {sf_dst} does not match "
+            f"m=c= connection address {dst}"
+        )
+    if _is_wildcard(sf_src, is_v6):
+        return False, (
+            f"SDP a=source-filter source {sf_src} is the wildcard address "
+            f"on multicast destination {dst} — IGMPv3 (S,G) joins won't route"
+        )
+    return True, (
+        f"SDP a=source-filter present: dst={dst} src={sf_src}"
+    )
+
+
+def check_sdp_dst_ip_vs_stream(
+    sdp_media: "MediaDescriptor | None",
+    stream_info: "Any | None",
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """SDP `c=` connection address SHALL match the destination IP observed
+    on the wire (TR-10-1 §10 transport consistency).
+
+    Codec-independent: the rule is about whether receivers can route to the
+    advertised group/address, not about media semantics. Per-codec validators
+    should register this as a SHALL requirement and pass their context's
+    media descriptor and stream_info directly.
+    """
+    if sdp_media is None:
+        return untestable("No SDP transport file provided (use --sdp)")
+    if stream_info is None:
+        return untestable("RTP stream not detected")
+    sdp_ip = sdp_media.connection_address
+    if not sdp_ip:
+        return untestable("SDP does not specify a connection address")
+    if sdp_ip != stream_info.dst_ip:
+        return False, (
+            f"SDP connection address={sdp_ip} differs from detected "
+            f"dst_ip={stream_info.dst_ip}"
+        )
+    return True, f"SDP connection address={sdp_ip} matches detected dst_ip"
+
+
+def check_sdp_session_consistency(
+    sdp_media: MediaDescriptor | None,
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """SDP self-consistency rules per TR-10-1 §10.4 / §10.5 + IPMX video MIB.
+
+    Asserts the same constraints `TP-10/TP-10-1Sec13.2.py:validate_config_vs_sdp`
+    enforces independent of any user config:
+
+      * `ts_ref_clock_source` ∈ {ptp, localmac}    (TR-10-1 §10.4)
+      * When source == localmac, the MAC string SHALL be UPPERCASE
+                                                  (TR-10-1 §10.4 formatting)
+      * `media_clock_type`     ∈ {direct, sender}  (TR-10-1 §10.5)
+      * When IPMX is set on a video stream, `h_total > 0`, `v_total > 0`,
+        `measured_pix_clk > 0` SHALL all hold on the SDP itself
+        (TR-10-1 §10.2 + §13 IPMX info-block consistency).
+
+    First failure wins; on success returns a one-line summary.
+    """
+    if sdp_media is None:
+        return untestable("No SDP provided")
+
+    # ts_ref_clock_source ∈ {ptp, localmac}
+    src = str(sdp_media.ts_ref_clock_source) if sdp_media.ts_ref_clock_source is not None else ""
+    if src not in ("ptp", "localmac"):
+        return False, (
+            f"SDP a=ts-refclk source must be 'ptp' or 'localmac' "
+            f"(TR-10-1 §10.4); got '{src or '<missing>'}'"
+        )
+
+    # localmac MAC SHALL be uppercase when present
+    if src == "localmac":
+        mac = sdp_media.ts_ref_clock_local_mac_address or ""
+        if mac and mac != mac.upper():
+            return False, (
+                f"SDP a=ts-refclk localmac MAC SHALL be UPPERCASE "
+                f"(TR-10-1 §10.4); got '{mac}'"
+            )
+
+    # media_clock_type ∈ {direct, sender}
+    mct = str(sdp_media.media_clock_type) if sdp_media.media_clock_type is not None else ""
+    if mct not in ("direct", "sender"):
+        return False, (
+            f"SDP a=mediaclk type must be 'direct' or 'sender' "
+            f"(TR-10-1 §10.5); got '{mct or '<missing>'}'"
+        )
+
+    # IPMX-on-video → h_total / v_total / measured_pix_clk SHALL all be > 0
+    is_ipmx = bool(getattr(sdp_media, "ipmx", False))
+    type_str = str(sdp_media.type).lower() if sdp_media.type is not None else ""
+    if is_ipmx and type_str == "video":
+        h_total = getattr(sdp_media, "h_total", 0) or 0
+        v_total = getattr(sdp_media, "v_total", 0) or 0
+        meas_px = getattr(sdp_media, "measured_pix_clk", 0) or 0
+        if h_total == 0 or v_total == 0 or meas_px == 0:
+            return False, (
+                f"IPMX video stream missing required fmtp fields "
+                f"(TR-10-1 §10.2): h_total={h_total}, v_total={v_total}, "
+                f"measured_pix_clk={meas_px}"
+            )
+
+    return True, (
+        f"SDP self-consistency OK: ts-refclk={src}, mediaclk={mct}"
+    )
 
 
 def summarize_results(results: list[RequirementResult]) -> str:

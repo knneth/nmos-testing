@@ -31,7 +31,8 @@ import ipmx_parse_rtp_pcap
 DEFAULT_CAPTURE_START = 1_700_000_000.0
 DEFAULT_CAPTURE_INTERVAL = 0.001
 DEFAULT_SRC_IP = "127.0.0.1"
-DEFAULT_DST_IP = "127.0.0.1"
+DEFAULT_DST_IP = "239.0.0.1"
+DEFAULT_ORIGIN_IP = "127.0.0.1"
 DEFAULT_ETH_SRC = "02:00:00:00:00:01"
 DEFAULT_ETH_DST = "02:00:00:00:00:02"
 AES3_BLOCK_PERIOD = 192
@@ -363,8 +364,11 @@ def build_aes3_channel_status_bytes(
     if not linear_pcm:
         data[0] |= 1 << 1
     data[1] = channel_mode.value & 0x0F
-    if linear_pcm:
-        data[2] = aes3_word_length_byte2(sample_size)
+    # Byte 2 word-length field (AES3 §6.2): set from `sample_size` for both
+    # PCM and non-PCM. For non-PCM S337M streams the word length must
+    # reflect the burst data_mode (16 → 0x20, 20 → 0x00, 24 → 0x2C) so a
+    # receiver can size the unpacking correctly (TR-10-12 §10).
+    data[2] = aes3_word_length_byte2(sample_size)
     data[23] = compute_aes3_channel_status_crc(data[:23])
     return bytes(data)
 
@@ -631,11 +635,11 @@ def generate_am824_sdp(
     ntp_timestamp = int(time_mod.time()) + ntp_epoch_offset
     sdp.session_id = ntp_timestamp
     sdp.session_version = ntp_timestamp
-    sdp.origin_address = DEFAULT_DST_IP
+    sdp.origin_address = DEFAULT_ORIGIN_IP
     sdp.session_name = "AM824 Test Stream"
     sdp.session_information = config.description
     sdp.connection_address = DEFAULT_DST_IP
-    sdp.connection_ttl = 0
+    sdp.connection_ttl = 32
     sdp.ts_ref_clock_source = E.LocalMac.value
     sdp.ts_ref_clock_local_mac_address = "00-20-FC-32-2F-40"
     sdp.media_clock_type = E.Sender.value
@@ -656,6 +660,9 @@ def generate_am824_sdp(
     media.ipmx = True
     media.sender_type = E.SenderType2110TPN.value
     media.max_udp = config.payload_bytes_per_packet
+
+    media.source_filter_dst_address = DEFAULT_DST_IP
+    media.source_filter_src_address = DEFAULT_SRC_IP
 
     # --- HKEP ---
     if hkep:
@@ -761,20 +768,54 @@ def load_pcm_signal_sources(
     return sources
 
 
+def detect_spdif_data_mode(data: bytes) -> int:
+    """Return the S337M data_mode used by the first burst found in
+    `data` (an SPDIF byte stream packed as AES3 left/right 16-bit BE
+    pairs, the format ffmpeg's SPDIF wrapper produces).
+
+    Falls back to 0 (16-bit packed) when no burst preamble is detected
+    (e.g. all-silence input). Used as the source-of-truth for both the
+    AES3 channel-status word length and the AES3 audio MIB sample_size
+    so the metadata stays in lockstep with whatever the encoder emits.
+    """
+    from ipmx_s337m import scan_s337m_signal
+
+    n_periods = len(data) // 4
+    data24_words: list[int] = []
+    validity_bits: list[int] = []
+    for i in range(n_periods):
+        base = i * 4
+        left = int.from_bytes(data[base : base + 2], "big") << 8
+        right = int.from_bytes(data[base + 2 : base + 4], "big") << 8
+        data24_words.append(left)
+        data24_words.append(right)
+        validity_bits.append(1)
+        validity_bits.append(1)
+    result = scan_s337m_signal(data24_words, validity_bits, 0)
+    if result.bursts:
+        return result.bursts[0].data_mode
+    return 0
+
+
 def load_spdif_signal_source(
     path: Path,
     *,
     config: AudioStreamConfig,
     element: AudioElementConfig,
 ) -> SpdifAes3SignalSource:
+    from ipmx_s337m import S337M_DATA_MODE_TO_SAMPLE_SIZE
+
+    data = path.read_bytes()
+    data_mode = detect_spdif_data_mode(data)
+    sample_size = S337M_DATA_MODE_TO_SAMPLE_SIZE[data_mode]
     channel_status = build_aes3_channel_status_bytes(
         sample_rate=config.sample_rate,
         linear_pcm=False,
         channel_mode=element.aes3_channel_mode,
-        sample_size=24,
+        sample_size=sample_size,
     )
     return SpdifAes3SignalSource(
-        path.read_bytes(),
+        data,
         period_total=config.period_count,
         channel_status_bytes=channel_status,
     )

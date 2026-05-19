@@ -661,12 +661,17 @@ def _check_enc_11_sdp_extmap_urns(
     sdp_urns = {uri for _, uri in extmap_entries}
     enc_urns = sdp_urns & ALL_ENCRYPTION_URNS
 
+    # TR-10-13 §20.4: PEP may encrypt an HDCP-encrypted stream in-place
+    # using the same HDCP CTR Full/Short RTP Extension Headers; in that
+    # combined case only the HDCP extmap URNs appear in the SDP and PEP
+    # reuses them. So a PEP URN is only required when PEP is active and
+    # HKEP is not.
     mismatches: list[str] = []
     if flags.hkep:
         hkep_urns = enc_urns & HKEP_SDP_URNS
         if not hkep_urns:
             mismatches.append("No HKEP extmap URNs found in SDP")
-    if flags.pep:
+    if flags.pep and not flags.hkep:
         pep_urns = enc_urns & PEP_SDP_URNS
         if not pep_urns:
             mismatches.append("No PEP extmap URNs found in SDP")

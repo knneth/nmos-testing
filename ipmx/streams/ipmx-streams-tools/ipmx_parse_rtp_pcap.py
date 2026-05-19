@@ -1389,9 +1389,12 @@ def extract_packet_nal_types(
         if nal_type == 24:
             return _extract_size_prefixed_nal_types(codec, payload, 1)
         if nal_type in {25, 26, 27, 29}:
-            raise SystemExit(
-                f"Interleaved packetization type {nal_type} is not permitted in this parser."
-            )
+            # H.264 interleaved-mode packetization (RFC 6184 §5.7). Not used
+            # by IPMX (TR-10-15c §15 mandates non-interleaved). Returning []
+            # rather than raising lets non-H.264 RTP streams (e.g. audio
+            # payloads passed via an unfiltered report builder) flow through
+            # harmlessly — they contribute nothing to the H.264 NAL stream.
+            return []
         if nal_type == 28 and len(payload) >= 2:
             return [payload[1] & 0x1F]
         return [nal_type]
@@ -1535,9 +1538,11 @@ def _process_payload_data(
             )
             return
         if nal_type in {25, 26, 27, 29}:
-            raise SystemExit(
-                f"Interleaved packetization type {nal_type} is not permitted in this parser."
-            )
+            # H.264 interleaved-mode packetization (RFC 6184 §5.7). Not used
+            # by IPMX; return without producing NALs so non-H.264 RTP
+            # payloads (audio, etc.) that happen to have low-5-bits == one
+            # of these values don't crash the parser.
+            return
         if nal_type == 28 and len(payload) >= 2:
             fu_header = payload[1]
             start = bool(fu_header & 0x80)

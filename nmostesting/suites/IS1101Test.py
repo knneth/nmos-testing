@@ -2477,25 +2477,30 @@ class IS1101Test(GenericTest):
                 # required only if the sender state is active_constraints_violation. A device that
                 # use an internal scaler to comply with the constraints is not required to modify 
                 # its EDID which sometime is the only interoperable choice (ex. Windows 11).
-                if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
-                    print(f"CHECK THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate}")
-                    answer = input("Press Enter if EDID is valid, type NO otherwise: ")
-                    edid_is_compliant = answer.strip().lower() not in ("no", "n")
-                else:
-                    edid_is_compliant = self.check_edid_preferred_grain_rate(
-                        test, input_id, another_refresh_rate
-                    )
-                    if edid_is_compliant:
-                        print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is VALID")
+                if state != "constrained":
+                    if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                        print(f"CHECK THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate}")
+                        answer = input("Press Enter if EDID is valid, type NO otherwise: ")
+                        edid_is_compliant = answer.strip().lower() not in ("no", "n")
                     else:
-                        print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is INVALID")
+                        edid_is_compliant = self.check_edid_preferred_grain_rate(
+                            test, input_id, another_refresh_rate
+                        )
+                        if edid_is_compliant:
+                            print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is VALID")
+                        else:
+                            print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is INVALID")
+
+                # Must come after awaiting_essence and no_essence loop
+                if do_not_accept_constraint:
+                    return test.UNCLEAR("This device cannot constrain the grain_rate")
 
                 # Must come after awaiting_essence and no_essence loop
                 if state == "active_constraints_violation" or do_not_accept_constraint:
                     if edid_is_compliant:
-                        return test.UNCLEAR("This device can not constraint grain_rate ### but the EDID is VALID ###")
+                        return test.UNCLEAR("This device cannot constrain the grain_rate ### but the EDID is VALID ###")
                     else:
-                        return test.UNCLEAR("This device can not constraint grain_rate ### and the EDID is INVALID ###")
+                        return test.UNCLEAR("This device cannot constrain the grain_rate ### and the EDID is INVALID ###")
 
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""
@@ -2855,25 +2860,30 @@ class IS1101Test(GenericTest):
                 # required only if the sender state is active_constraints_violation. A device that
                 # use an internal scaler to comply with the constraints is not required to modify 
                 # its EDID which sometime is the only interoperable choice (ex. Windows 11).
-                if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
-                    print(f"CHECK THE SOURCE EDID for a preferred sample rate of {another_sample_rate}")
-                    answer = input("Press Enter if EDID is valid, type NO otherwise: ")
-                    edid_is_compliant = answer.strip().lower() not in ("no", "n")
-                else:
-                    edid_is_compliant = self.check_edid_supports_only_audio_sample_rate(
-                        test, input_id, another_sample_rate
-                    )
-                    if edid_is_compliant:
-                        print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is VALID")
+                if state != "constrained":
+                    if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                        print(f"CHECK THE SOURCE EDID for a preferred sample rate of {another_sample_rate}")
+                        answer = input("Press Enter if EDID is valid, type NO otherwise: ")
+                        edid_is_compliant = answer.strip().lower() not in ("no", "n")
                     else:
-                        print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is INVALID")
+                        edid_is_compliant = self.check_edid_supports_only_audio_sample_rate(
+                            test, input_id, another_sample_rate
+                        )
+                        if edid_is_compliant:
+                            print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is VALID")
+                        else:
+                            print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is INVALID")
+
+                # Must come after awaiting_essence and no_essence loop
+                if do_not_accept_constraint:
+                    return test.UNCLEAR("This device cannot constrain the sample_rate")
 
                 # Must come after awaiting_essence and no_essence loop
                 if state == "active_constraints_violation" or do_not_accept_constraint:
                     if edid_is_compliant:
-                        return test.UNCLEAR("This device can not constraint sample_rate ### but the EDID is VALID ###")
+                        return test.UNCLEAR("This device cannot constrain the sample_rate ### but the EDID is VALID ###")
                     else:
-                        return test.UNCLEAR("This device can not constraint sample_rate ### and the EDID is INVALID ###")
+                        return test.UNCLEAR("This device cannot constrain the sample_rate ### and the EDID is INVALID ###")
 
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""

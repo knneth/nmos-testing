@@ -46,6 +46,7 @@ from ipmx_validate_common import (
     compute_nominal_period,
     cross_validate_exactframerate,
     extract_exact_framerate_from_sr,
+    filter_capture_boundary_orphan_srs,
     interval_variation_in_window,
     nominal_ticks_per_period_from_seconds,
     parse_exactframerate_arg,
@@ -1490,21 +1491,11 @@ def check_sdp_port_vs_stream(ctx: JXSVValidationContext) -> tuple[bool, str]:
     return True, f"SDP port={sdp_port} matches detected RTP port"
 
 
-def check_sdp_dst_ip_vs_stream(ctx: JXSVValidationContext) -> tuple[bool, str]:
+def check_sdp_dst_ip_vs_stream(ctx: JXSVValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
     """SDP connection address SHALL match the detected destination IP."""
-    if ctx.sdp is None:
-        return untestable("No SDP transport file provided (use --sdp)")
-    if ctx.stream_info is None:
-        return untestable("RTP stream not detected")
-    sdp_ip = ctx.sdp.media.connection_address
-    if not sdp_ip:
-        return untestable("SDP does not specify a connection address")
-    if sdp_ip != ctx.stream_info.dst_ip:
-        return False, (
-            f"SDP connection address={sdp_ip} differs from detected "
-            f"dst_ip={ctx.stream_info.dst_ip}"
-        )
-    return True, f"SDP connection address={sdp_ip} matches detected dst_ip"
+    from ipmx_validate_common import check_sdp_dst_ip_vs_stream as _check
+    sdp_media = ctx.sdp.media if ctx.sdp is not None else None
+    return _check(sdp_media, ctx.stream_info)
 
 
 # ---------------------------------------------------------------------------
@@ -1565,7 +1556,8 @@ def check_sr_mapping(ctx: JXSVValidationContext) -> tuple[bool, str]:
             (f.first_capture_time for f in ctx.frames if f.first_capture_time is not None),
             default=0.0,
         )
-        real_unknown = [sr for sr in unknown if sr.capture_time <= last_frame_time]
+        real_unknown = filter_capture_boundary_orphan_srs(
+            unknown, set(ctx.frames_by_ts.keys()), last_frame_time)
         if real_unknown:
             return False, f"SRs reference {len(real_unknown)} unknown RTP timestamps"
     return True, "SRs present for all frames"

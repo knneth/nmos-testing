@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import Any
 
 from MatroxSdp import MatroxSdp, MatroxSdpEnums, MediaDescriptor
-from MatroxSdpCheck import SdpCheckError, check_sdp_st2110_31
+from MatroxSdpCheck import (
+    SdpCheckError,
+    check_sdp_rfc3551,
+    check_sdp_st2110_10,
+    check_sdp_st2110_31,
+)
 from ipmx_am824 import (
     Am824StreamReport,
     analyze_am824_packets,
@@ -49,6 +54,8 @@ from ipmx_validate_common import (
     RequirementResult,
     SenderReportInfo,
     check_sdp_ipmx_fmtp,
+    check_sdp_multicast_source_filter,
+    check_sdp_session_consistency,
     check_sr_initial_rtp_clock,
     check_sr_rc_zero,
     parse_sender_reports,
@@ -946,14 +953,39 @@ def check_sdp_channel_order(ctx: Am824ValidationContext) -> tuple[bool, str] | t
     return True, f"SDP channel-order '{ctx.sdp_media.channel_order}' uses SMPTE2110. convention"
 
 
-def check_sdp_st2110_31_wrapper(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+def check_sdp_wrapper(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """Comprehensive SDP-side requirement for IPMX AM824 streams.
+
+    Mirrors the per-media-type checklist `TP-10/TP-10-1Sec13.2.py:195-232`
+    runs for `audio/am824` (RFC 3551 + ST 2110-10 + ST 2110-31) and adds
+    the project-local IPMX checks: the IPMX fmtp keyword (TR-10-1 §10.1)
+    and the multicast source-filter signaling (TR-10-9 §17 / RFC 4570).
+    First failure wins; on success the message is a one-line summary.
+    """
     if ctx.sdp_media is None:
         return untestable("No SDP provided")
     try:
+        check_sdp_rfc3551(ctx.sdp_media)
+        check_sdp_st2110_10(ctx.sdp_media)
         check_sdp_st2110_31(ctx.sdp_media)
     except SdpCheckError as exc:
-        return False, f"MatroxSdpCheck ST 2110-31 validation failed: {exc}"
-    return True, "MatroxSdpCheck ST 2110-31 validation passed"
+        return False, f"MatroxSdpCheck failed: {exc}"
+    ok, msg, *tail = check_sdp_ipmx_fmtp(ctx.sdp_media)
+    if not ok and (not tail or tail[0]):
+        return False, msg
+    sf = check_sdp_multicast_source_filter(ctx.sdp_media)
+    sf_na = (len(sf) == 3 and not sf[2])
+    if not sf_na and not sf[0]:
+        return False, sf[1]
+    sc = check_sdp_session_consistency(ctx.sdp_media)
+    if not sc[0]:
+        return False, sc[1]
+    if sf_na:
+        return True, (
+            f"MatroxSdpCheck + IPMX fmtp + session consistency passed; "
+            f"source-filter N/A ({sf[1]})"
+        )
+    return True, "MatroxSdpCheck + IPMX fmtp + source-filter + session consistency all passed"
 
 
 def check_cli_payload_type(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
@@ -1527,6 +1559,7 @@ def check_sequence_continuity(ctx: Am824ValidationContext) -> tuple[bool, str]:
 
 
 def check_capture_interval_stability(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    # AES67 §7.5 SHOULD: variation from nominal transmission time ≤ 1 packet time
     if len(ctx.rtp_packets) < 3:
         return untestable("Not enough packets to assess capture interval stability")
     if ctx.resolved_ptime_us is None:
@@ -1537,9 +1570,27 @@ def check_capture_interval_stability(ctx: Am824ValidationContext) -> tuple[bool,
     expected = ctx.resolved_ptime_us / 1_000_000.0
     deltas = [cur - prev for prev, cur in zip(times, times[1:])]
     max_error = max(abs(delta - expected) for delta in deltas)
-    if max_error > max(expected * 0.05, 0.0002):
-        return False, f"Capture interval variation exceeds tolerance (max error {max_error*1000:.3f} ms)"
-    return True, f"Capture intervals are stable around {expected*1000:.3f} ms"
+    if max_error > expected:
+        return False, f"Capture interval variation {max_error*1000:.3f} ms exceeds AES67 §7.5 SHOULD ≤ 1·ptime ({expected*1000:.3f} ms)"
+    return True, f"Capture intervals stable within AES67 §7.5 SHOULD ≤ 1·ptime ({expected*1000:.3f} ms)"
+
+
+def check_capture_interval_aes67_shall(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    # AES67 §7.5 SHALL: variation from nominal transmission time ≤ min(17·ptime, 17 ms)
+    if len(ctx.rtp_packets) < 3:
+        return untestable("Not enough packets to assess capture interval stability")
+    if ctx.resolved_ptime_us is None:
+        return untestable("ptime unresolved — cannot assess capture interval stability")
+    times = [packet.capture_time for packet in ctx.rtp_packets if packet.capture_time is not None]
+    if len(times) < 3:
+        return untestable("Capture timestamps unavailable")
+    expected = ctx.resolved_ptime_us / 1_000_000.0
+    shall = min(17 * expected, 0.017)
+    deltas = [cur - prev for prev, cur in zip(times, times[1:])]
+    max_error = max(abs(delta - expected) for delta in deltas)
+    if max_error > shall:
+        return False, f"Capture interval variation {max_error*1000:.3f} ms exceeds AES67 §7.5 SHALL ≤ min(17·ptime, 17 ms) ({shall*1000:.3f} ms)"
+    return True, f"Capture intervals within AES67 §7.5 SHALL ≤ min(17·ptime, 17 ms) ({shall*1000:.3f} ms)"
 
 
 # ---------------------------------------------------------------------------
@@ -1814,6 +1865,11 @@ def check_cli_s337m_data_type(ctx: Am824ValidationContext) -> tuple[bool, str] |
     return True, f"S337M data_type = 0x{ctx.cli_s337m_data_type:02X} matches --s337m-data-type"
 
 
+def check_sdp_dst_ip_vs_stream_am824(ctx: Am824ValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    from ipmx_validate_common import check_sdp_dst_ip_vs_stream as _check
+    return _check(ctx.sdp_media, ctx.stream_info)
+
+
 def build_requirements() -> list[Requirement]:
     reqs: list[Requirement] = []
 
@@ -1864,7 +1920,13 @@ def build_requirements() -> list[Requirement]:
     add("ST2110-31-6.1-PTIME-LEGAL", "shall", "SDP ptime shall be legal for the SDP sample rate", check_sdp_ptime_legal)
     add("ST2110-31-6.1-PT-MATCH", "shall", "SDP payload type shall match the RTP stream", check_sdp_payload_match)
     add("ST2110-31-6.2-CHORDER", "shall", "SDP channel-order shall follow the ST 2110 convention when present", check_sdp_channel_order)
-    add("ST2110-31-6.1-SDPCHECK", "shall", "SDP shall satisfy the repo's ST 2110-31 SDP checker", check_sdp_st2110_31_wrapper)
+    add("IPMX-SDP-WRAPPER", "shall",
+        "SDP shall satisfy RFC 3551 + ST 2110-10 + ST 2110-31 + IPMX fmtp + "
+        "TR-10-9 §17 source-filter (multicast)",
+        check_sdp_wrapper)
+    add("SDP-DST-IP", "shall",
+        "SDP connection address SHALL match the detected destination IP.",
+        check_sdp_dst_ip_vs_stream_am824)
     add("TR-10-1-8.7-SR-PRESENT", "shall", "RTCP Sender Reports shall be present", check_sr_present)
     add("TR-10-1-8.7-SR-IP", "shall", "RTCP Sender Reports shall use the same destination IP as RTP", check_sr_ip)
     add("TR-10-1-8.7-SR-PORT", "shall", "RTCP Sender Reports shall use the expected RTCP destination port", check_sr_port)
@@ -1913,7 +1975,12 @@ def build_requirements() -> list[Requirement]:
     add("AM824-CLI-SAMPLESIZE", "shall", "CLI --sample-size shall match the SR audio MIB when provided", check_cli_sample_size)
     add("AM824-CLI-MEASURED-SR", "shall", "CLI --measured-sample-rate shall match the SR audio MIB when provided", check_cli_measured_sample_rate)
     add("RTP-SEQ", "should", "RTP sequence numbers should be contiguous", check_sequence_continuity)
-    add("RTP-CAPTURE-PTIME", "should", "PCAP capture intervals should be stable around ptime", check_capture_interval_stability)
+    add("RTP-CAPTURE-PTIME", "should",
+        "AES67 §7.5 SHOULD: sender variation from nominal transmission time should be ≤ 1 packet time",
+        check_capture_interval_stability)
+    add("AES67-7.5-PTIME-SHALL", "shall",
+        "AES67 §7.5: sender variation from nominal transmission time shall be ≤ min(17·ptime, 17 ms)",
+        check_capture_interval_aes67_shall)
     return reqs
 
 

@@ -233,36 +233,37 @@ def scan_s337m_signal(
     n = len(data24_words)
 
     # ------------------------------------------------------------------
-    # Pass 1 — locate all Pa sync words and their data_mode
+    # Pass 1 — locate Pa+Pb sync sequences. The S337M sync is the *pair*
+    # Pa(0xF87200…) followed by Pb(0x4E1F00…) in the next DATA24 slot.
+    # Compressed payload bytes (e.g. inside an AAC burst) can randomly
+    # match the Pa pattern alone — but the chance of also matching the
+    # next slot as Pb is vanishingly small (~1/16M). Requiring both here
+    # filters out content-dependent false positives without losing real
+    # bursts. (Catching real bursts with corrupt Pb is already covered
+    # by AES3-4.1.1-P parity and ENC-* integrity checks.)
     # ------------------------------------------------------------------
     pa_positions: list[tuple[int, int]] = []  # (word_index, data_mode)
-    for i, word in enumerate(data24_words):
+    for i in range(n - 1):
+        word = data24_words[i]
         mode = _PA_LOOKUP.get(word)
-        if mode is not None:
-            pa_positions.append((i, mode))
+        if mode is None:
+            continue
+        if data24_words[i + 1] != S337M_PB[mode]:
+            continue  # false-positive Pa pattern in payload bytes
+        pa_positions.append((i, mode))
 
     if not pa_positions:
-        # No Pa found — the scan reports 0 bursts; check_s337m_sync_words will fail.
+        # No Pa+Pb sync sequence found — check_s337m_sync_words will fail.
         return result
 
     # ------------------------------------------------------------------
-    # Pass 2 — for each Pa, verify Pb/Pc/Pd and build S337mBurst
+    # Pass 2 — for each confirmed Pa+Pb, parse Pc/Pd and build S337mBurst
     # ------------------------------------------------------------------
     for burst_idx, (pa_idx, data_mode) in enumerate(pa_positions):
         if pa_idx + 3 >= n:
             result.parse_errors.append(
-                f"Signal {signal_index}: Pa at word {pa_idx} (frame {pa_idx // 2}) "
-                "— stream ends before Pb/Pc/Pd can be read"
-            )
-            continue
-
-        # Pb must immediately follow Pa in the same AES3 frame
-        expected_pb = S337M_PB[data_mode]
-        actual_pb = data24_words[pa_idx + 1]
-        if actual_pb != expected_pb:
-            result.parse_errors.append(
-                f"Signal {signal_index}: Pa at word {pa_idx} (frame {pa_idx // 2}) "
-                f"— Pb=0x{actual_pb:06X} expected 0x{expected_pb:06X} for mode {data_mode}"
+                f"Signal {signal_index}: Pa+Pb at word {pa_idx} (frame {pa_idx // 2}) "
+                "— stream ends before Pc/Pd can be read"
             )
             continue
 

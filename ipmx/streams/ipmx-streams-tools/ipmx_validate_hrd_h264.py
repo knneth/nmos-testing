@@ -681,6 +681,9 @@ _H264_TIMING_CHECK_DESCRIPTIONS: dict[str, str] = {
     "H264-HRD-TIME-01": "PCAP last-packet arrival should not exceed HRD nominal removal time.",
     "H264-HRD-TIME-02": "Actual average bit rate should be consistent with declared BitRate.",
     "H264-HRD-TIME-03": "InitCpbRemovalDelay should be consistent with observed initial buffering.",
+    "H264-HRD-TIME-EQC3": "PCAP first-packet times shall be ≥ H.264 §C.1.1 eq (C-3) lower bound "
+                          "max(t_af(j-1), tai_earliest(j)); lateness is permitted by TR-10-15c §15 "
+                          "AU_offset window. Underrun (early firing) is the only violation.",
 }
 
 
@@ -804,6 +807,64 @@ def check_pcap_timing(ctx: ValidationContext) -> list[RequirementResult]:
     else:
         _add("H264-HRD-TIME-03", "should", False,
              "No buffering period data for initial delay check", testable=False)
+
+    # H264-HRD-TIME-EQC3: eq (C-3) lower-bound check on wire schedule.
+    # Per TR-10-15c §15, the AU offset between encoder CPB insertion and
+    # transmission ranges over [0, cpb_size/max_bitrate]. The sender is
+    # therefore free to delay AU j's first byte beyond eq (C-3)'s lower
+    # bound t_ai(j) = max(t_af(j-1), tai_earliest(j)); doing so is required
+    # to honour the encoder pour timeline T_pour(j) (TR-10-9 §11.2b SR
+    # cadence + TR-10-15c §15 SR-before-AU). What is NOT permitted is for
+    # wire(j) to fire BEFORE eq (C-3)'s lower bound — that would underrun
+    # the decoder's CPB. The upper bound (t_af(j) ≤ t_r,n(j)) is enforced
+    # separately by H264-HRD-TIME-01. Tolerance is 1 ms (kernel jitter band).
+    EQC3_TOLERANCE_S = 0.002  # 2 ms — aligned with IPMX TR-10-9 §11.2b SR-cadence jitter cap
+    if len(sim.au_results) >= 2:
+        au0_first = None
+        for r0 in sim.au_results:
+            a0 = aus_by_ts.get(r0.rtp_timestamp)
+            if a0 is not None and a0.first_packet_time is not None:
+                au0_first = a0.first_packet_time
+                au0_hrd_arr = float(r0.init_arrival_time)
+                break
+        if au0_first is not None:
+            max_lateness_s = 0.0
+            min_earliness_s = 0.0
+            worst_au_ts: int | None = None
+            early_count = 0
+            for r in sim.au_results:
+                au = aus_by_ts.get(r.rtp_timestamp)
+                if au is None or au.first_packet_time is None:
+                    continue
+                pcap_relative = au.first_packet_time - au0_first
+                hrd_relative = float(r.init_arrival_time) - au0_hrd_arr
+                delta = pcap_relative - hrd_relative
+                if delta < -EQC3_TOLERANCE_S:
+                    early_count += 1
+                    if delta < min_earliness_s:
+                        min_earliness_s = delta
+                        worst_au_ts = r.rtp_timestamp
+                if delta > max_lateness_s:
+                    max_lateness_s = delta
+            if early_count > 0:
+                _add("H264-HRD-TIME-EQC3", "shall", False,
+                     f"{early_count} AUs fired BEFORE eq C-3 lower bound by >"
+                     f"{EQC3_TOLERANCE_S*1000:.1f}ms; min earliness "
+                     f"{min_earliness_s*1000:.3f}ms (at ts={worst_au_ts})")
+            else:
+                _add("H264-HRD-TIME-EQC3", "shall", True,
+                     f"PCAP first-packet times ≥ eq C-3 lower bound within "
+                     f"{EQC3_TOLERANCE_S*1000:.1f}ms; max lateness "
+                     f"{max_lateness_s*1000:.3f}ms (TR-10-15c §15 permissive "
+                     f"AU_offset window, {len(sim.au_results)} AUs)")
+        else:
+            _add("H264-HRD-TIME-EQC3", "shall", False,
+                 "No AU with PCAP first_packet_time — cannot evaluate eq C-3",
+                 testable=False)
+    else:
+        _add("H264-HRD-TIME-EQC3", "shall", False,
+             "Need ≥2 AUs in HRD trace for eq C-3 schedule comparison",
+             testable=False)
 
     return results
 
