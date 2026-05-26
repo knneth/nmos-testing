@@ -112,6 +112,21 @@ def _variable_bytes(value: object | None) -> bytes:
         return text.encode("ascii")
 
 
+def _h264_param_set_bytes(value: object | None) -> bytes:
+    """Decode an sprop-parameter-sets / sprop-level-parameter-sets value.
+
+    Per TR-10-15c §16, these MIB byte arrays carry the same base64 ASCII
+    characters that appear in the SDP a=fmtp line (with optional ',' list
+    separators). The JSON config holds that ASCII string verbatim.
+    """
+    if value is None:
+        return b""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    text = str(value)
+    return text.encode("ascii") if text else b""
+
+
 MEDIA_INFO_TYPES: dict[int, tuple[str, type["IPMXMediaInfoBlock"]]] = {}
 
 
@@ -468,6 +483,17 @@ class H264MediaInfoBlock(IPMXMediaInfoBlock):
         header.extend((total_words - 1).to_bytes(2, "big"))
         return bytes(header + payload)
 
+    def to_dict(self) -> dict[str, object]:
+        # TR-10-15c §16: sprop_parameter_sets and sprop_level_parameter_sets
+        # are base64 ASCII characters as represented in the SDP transport file
+        # (with optional ',' list separators). Keep them human-readable on
+        # export rather than hex-encoding the ASCII bytes.
+        result = super().to_dict()
+        for key in ("sprop_parameter_sets", "sprop_level_parameter_sets"):
+            val = getattr(self, key)
+            result[key] = val.decode("ascii") if val else ""
+        return result
+
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "H264MediaInfoBlock":
         return cls(
@@ -481,10 +507,10 @@ class H264MediaInfoBlock(IPMXMediaInfoBlock):
             ),
             sprop_deint_buf_req=_int_or_none(data.get("sprop_deint_buf_req")),
             sprop_init_buf_time=_int_or_none(data.get("sprop_init_buf_time")),
-            sprop_parameter_sets=_variable_bytes(
+            sprop_parameter_sets=_h264_param_set_bytes(
                 data.get("sprop_parameter_sets")
             ),
-            sprop_level_parameter_sets=_variable_bytes(
+            sprop_level_parameter_sets=_h264_param_set_bytes(
                 data.get("sprop_level_parameter_sets")
             ),
             extra_bytes=_variable_bytes(data.get("extra_bytes")),

@@ -415,14 +415,17 @@ def write_analysis_csv(
     codec: str,
     exact_framerate: Fraction,
     ffmpeg_frames: int,
+    port: int | None = None,
 ) -> None:
     """Build a per-RTP-packet CSV with CMAX, HRD, wire, and AU columns.
 
     Every row is self-contained so that Excel formulas can reference any
-    column on the same row without cross-lookups.
+    column on the same row without cross-lookups. ``port`` filters to a
+    single UDP destination port so audio streams on adjacent ports don't
+    feed the H.264/H.265 NAL parser with non-codec payloads.
     """
     # ---- 1. Parse the PCAP with the full validation pipeline ----
-    report = ipmx_validate_common.build_rtp_report(pcap_path, codec, None, None)
+    report = ipmx_validate_common.build_rtp_report(pcap_path, codec, port, None)
     timeline = ipmx_validate_common.build_timeline(report, codec, ffmpeg_frames)
 
     # ---- 2. Extract HRD parameters from SPS ----
@@ -516,10 +519,21 @@ def write_analysis_csv(
     cinst_trace = cmax_sim.cinst_trace or []
 
     # ---- 6. CPB simulation (HRD timing) ----
+    # Dispatch SEI extraction by codec: H.265's extract_sei_per_au reads
+    # PREFIX_SEI_NUT (nal_type 39), while H.264 SEIs live in NAL type 6 —
+    # different field layouts in both BP and pic_timing SEIs. Using the
+    # H.265 extractor for an H.264 stream returns empty maps and the CPB
+    # simulation gets skipped → CSV HRD columns stay blank. Fixed here so
+    # ipmx_validate_hrd_h264.extract_sei_per_au_h264 is used for codec=h264.
     cpb_by_ts: dict[int, _CpbInfo] = {}
+    bp_map: dict[int, Any] = {}
     if hrd and timeline and timeline.raw_headers:
-        bp_map, pt_map, _ = ipmx_validate_hrd.extract_sei_per_au(
-            report, timeline.raw_headers)
+        if codec == "h264":
+            bp_map, pt_map, _ = ipmx_validate_hrd_h264.extract_sei_per_au_h264(
+                report, timeline.raw_headers)
+        else:
+            bp_map, pt_map, _ = ipmx_validate_hrd.extract_sei_per_au(
+                report, timeline.raw_headers)
         au_sizes = ipmx_validate_hrd.compute_au_sizes(report)
         simulated_sizes = [s for s in au_sizes if s.rtp_timestamp in pt_map]
         if simulated_sizes:
@@ -537,6 +551,21 @@ def write_analysis_csv(
                     overflow=ar.overflow,
                     underflow=ar.underflow,
                 )
+
+    # ---- 6b. Per-AU initial_cpb_removal_delay_offset (H.264 §C.1.2 / H.265 §C.2.4.1) ----
+    # The buffering-period SEI is only attached to RAP AUs. Per the CVS-wide
+    # constraint (sum of delay + offset is constant), the offset declared at
+    # any BP applies to subsequent AUs until the next BP. Carry it forward
+    # so every AU row shows the active offset value. Raw units are 90 kHz
+    # ticks; the CSV exports nanoseconds to match the other timing columns.
+    removal_delay_offset_ticks_by_ts: dict[int, int] = {}
+    current_offset_ticks: int | None = None
+    for au in report.access_units:
+        bp = bp_map.get(au.timestamp)
+        if bp is not None:
+            current_offset_ticks = int(bp.init_cpb_removal_delay_offset)
+        if current_offset_ticks is not None:
+            removal_delay_offset_ticks_by_ts[au.timestamp] = current_offset_ticks
 
     # ---- 7. Write the CSV ----
     fieldnames = [
@@ -572,6 +601,7 @@ def write_analysis_csv(
         "HRD arr ns",
         "HRD fin ns",
         "HRD rem ns",
+        "rem delay offset ns",
         "CPB at rem bits",
         "CPB after bits",
         "overflow",
@@ -659,6 +689,10 @@ def write_analysis_csv(
                 "HRD rem ns": (
                     int(cpb.cpb_removal_time * 1_000_000_000) if cpb else ""
                 ),
+                "rem delay offset ns": (
+                    int(removal_delay_offset_ticks_by_ts[ts] * 1_000_000_000 / 90000)
+                    if ts in removal_delay_offset_ticks_by_ts else ""
+                ),
                 "CPB at rem bits": (
                     f"{cpb.cpb_occupancy_at_removal:.0f}" if cpb else ""
                 ),
@@ -682,6 +716,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="PCAP to analyse, or source video when --re-encode is used")
     parser.add_argument("--codec", choices=["h265", "h264"], default="h265")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5004,
+        help="UDP port of the video RTP stream (default 5004); audio streams on other ports are ignored",
+    )
     parser.add_argument("--fps", type=float, default=60.0, help="Frame rate (used for TFRAME derivation)")
     parser.add_argument("--frames", type=int, default=0, help="Frames to trace with ffmpeg for SPS/SEI extraction (0 = all)")
     parser.add_argument(
@@ -766,7 +806,7 @@ def main() -> int:
             raise SystemExit("--csv <path> is required for PCAP analysis mode")
         exact_fr = Fraction(args.fps).limit_denominator(100000)
         ffmpeg_frames = args.frames if args.frames > 0 else 999_999
-        write_analysis_csv(args.csv, args.input, args.codec, exact_fr, ffmpeg_frames)
+        write_analysis_csv(args.csv, args.input, args.codec, exact_fr, ffmpeg_frames, port=args.port)
         return 0
 
     # ---- Re-encode → capture → analyse pipeline ----
@@ -847,7 +887,7 @@ def main() -> int:
 
     if args.csv is not None:
         exact_fr = Fraction(args.fps).limit_denominator(100000)
-        write_analysis_csv(args.csv, pcap_path, args.codec, exact_fr, args.encode_frames)
+        write_analysis_csv(args.csv, pcap_path, args.codec, exact_fr, args.encode_frames, port=args.port)
 
     return 0
 

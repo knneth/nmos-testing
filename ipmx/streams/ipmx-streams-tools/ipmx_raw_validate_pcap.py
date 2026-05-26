@@ -32,6 +32,13 @@ from fractions import Fraction
 
 import ipmx_parse_rtp_pcap
 import ipmx_validate_encryption
+from MatroxSdpCheck import (
+    SdpCheckError,
+    check_sdp_rfc4175,
+    check_sdp_st2110_10,
+    check_sdp_st2110_20,
+    check_sdp_st2110_21,
+)
 from ipmx_validate_encryption import detect_encryption
 from ipmx_validate_common import (
     CLOCK_RATE,
@@ -39,6 +46,8 @@ from ipmx_validate_common import (
     RequirementResult,
     SenderReportInfo,
     check_sdp_ipmx_fmtp,
+    check_sdp_multicast_source_filter,
+    check_sdp_session_consistency,
     check_sr_initial_rtp_clock,
     check_sr_ntp_self_consistent,
     check_sr_ntp_vs_capture_rate,
@@ -48,6 +57,7 @@ from ipmx_validate_common import (
     cross_validate_exactframerate,
     extract_exact_framerate_from_sr,
     extract_video_params_from_sr,
+    filter_capture_boundary_orphan_srs,
     interval_variation_in_window,
     parse_exactframerate_arg,
     parse_sender_reports,
@@ -809,21 +819,11 @@ def check_sdp_port_vs_stream(ctx: RawValidationContext) -> tuple[bool, str]:
     return True, f"SDP port={sdp_port} matches detected RTP port"
 
 
-def check_sdp_dst_ip_vs_stream(ctx: RawValidationContext) -> tuple[bool, str]:
+def check_sdp_dst_ip_vs_stream(ctx: RawValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
     """SDP connection address SHALL match the detected destination IP."""
-    if ctx.sdp is None:
-        return untestable("No SDP transport file provided (use --sdp)")
-    if ctx.stream_info is None:
-        return untestable("RTP stream not detected")
-    sdp_ip = ctx.sdp.media.connection_address
-    if not sdp_ip:
-        return untestable("SDP does not specify a connection address")
-    if sdp_ip != ctx.stream_info.dst_ip:
-        return False, (
-            f"SDP connection address={sdp_ip} differs from detected "
-            f"dst_ip={ctx.stream_info.dst_ip}"
-        )
-    return True, f"SDP connection address={sdp_ip} matches detected dst_ip"
+    from ipmx_validate_common import check_sdp_dst_ip_vs_stream as _check
+    sdp_media = ctx.sdp.media if ctx.sdp is not None else None
+    return _check(sdp_media, ctx.stream_info)
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +881,8 @@ def check_sr_mapping(ctx: RawValidationContext) -> tuple[bool, str]:
             (f.first_capture_time for f in ctx.frames if f.first_capture_time is not None),
             default=0.0,
         )
-        real_unknown = [sr for sr in unknown if sr.capture_time <= last_frame_time]
+        real_unknown = filter_capture_boundary_orphan_srs(
+            unknown, set(ctx.frames_by_ts.keys()), last_frame_time)
         if real_unknown:
             return False, f"SRs reference {len(real_unknown)} unknown RTP timestamps"
     return True, "SRs present for all frames"
@@ -987,6 +988,43 @@ def check_rtp_seq_complete(ctx: RawValidationContext) -> tuple[bool, str]:
     if seq.complete:
         return True, seq.summary()
     return False, f"PCAP is incomplete: {seq.summary()}"
+
+
+def check_sdp_wrapper(ctx: RawValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """Comprehensive SDP-side requirement for IPMX raw video streams.
+
+    Mirrors the per-media-type checklist `TP-10/TP-10-1Sec13.2.py:195-232`
+    runs for `video/raw` (RFC 4175 + ST 2110-10 + ST 2110-21 + ST 2110-20)
+    and adds the project-local IPMX checks: the IPMX fmtp keyword
+    (TR-10-1 §10.1) and the multicast source-filter signaling
+    (TR-10-9 §17 / RFC 4570). First failure wins.
+    """
+    media = ctx.sdp.media if ctx.sdp is not None else None
+    if media is None:
+        return untestable("No SDP provided")
+    try:
+        check_sdp_rfc4175(media)
+        check_sdp_st2110_10(media)
+        check_sdp_st2110_21(media)
+        check_sdp_st2110_20(media)
+    except SdpCheckError as exc:
+        return False, f"MatroxSdpCheck failed: {exc}"
+    ok, msg, *tail = check_sdp_ipmx_fmtp(media)
+    if not ok and (not tail or tail[0]):
+        return False, msg
+    sf = check_sdp_multicast_source_filter(media)
+    sf_na = (len(sf) == 3 and not sf[2])
+    if not sf_na and not sf[0]:
+        return False, sf[1]
+    sc = check_sdp_session_consistency(media)
+    if not sc[0]:
+        return False, sc[1]
+    if sf_na:
+        return True, (
+            f"MatroxSdpCheck + IPMX fmtp + session consistency passed; "
+            f"source-filter N/A ({sf[1]})"
+        )
+    return True, "MatroxSdpCheck + IPMX fmtp + source-filter + session consistency all passed"
 
 
 # ---------------------------------------------------------------------------
@@ -1111,6 +1149,10 @@ def build_requirements(ctx: RawValidationContext) -> list[Requirement]:
     add("TR-10-1-10.1-IPMX-FMTP", "shall",
         "SDP a=fmtp line shall contain the IPMX keyword (TR-10-1 §10.1).",
         lambda c=ctx: check_sdp_ipmx_fmtp(c.sdp.media if c.sdp is not None else None))
+    add("IPMX-SDP-WRAPPER", "shall",
+        "SDP shall satisfy RFC 4175 + ST 2110-10 + ST 2110-21 + ST 2110-20 + "
+        "IPMX fmtp + TR-10-9 §17 source-filter (multicast)",
+        lambda c=ctx: check_sdp_wrapper(c))
 
     # --- TR-10-9: Frame-to-frame timing ---
     add("TR-10-9-11.2a", "shall",

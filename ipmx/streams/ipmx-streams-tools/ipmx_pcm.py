@@ -45,7 +45,8 @@ from ipmx_am824 import (
 DEFAULT_CAPTURE_START = 1_700_000_000.0
 DEFAULT_CAPTURE_INTERVAL = 0.001
 DEFAULT_SRC_IP = "127.0.0.1"
-DEFAULT_DST_IP = "127.0.0.1"
+DEFAULT_DST_IP = "239.0.0.1"
+DEFAULT_ORIGIN_IP = "127.0.0.1"
 DEFAULT_ETH_SRC = "02:00:00:00:00:01"
 DEFAULT_ETH_DST = "02:00:00:00:00:02"
 
@@ -312,11 +313,11 @@ def generate_pcm_sdp(
     ntp_timestamp = int(time_mod.time()) + ntp_epoch_offset
     sdp.session_id = ntp_timestamp
     sdp.session_version = ntp_timestamp
-    sdp.origin_address = DEFAULT_DST_IP
+    sdp.origin_address = DEFAULT_ORIGIN_IP
     sdp.session_name = "PCM Test Stream"
     sdp.session_information = config.description
     sdp.connection_address = DEFAULT_DST_IP
-    sdp.connection_ttl = 0
+    sdp.connection_ttl = 32
     sdp.ts_ref_clock_source = E.LocalMac.value
     sdp.ts_ref_clock_local_mac_address = "00-20-FC-32-2F-40"
     sdp.media_clock_type = E.Sender.value
@@ -343,6 +344,9 @@ def generate_pcm_sdp(
     media.ipmx = True
     media.sender_type = E.SenderType2110TPN.value
     media.max_udp = config.payload_bytes_per_packet
+
+    media.source_filter_dst_address = DEFAULT_DST_IP
+    media.source_filter_src_address = DEFAULT_SRC_IP
 
     if hkep:
         hd = HkepDescriptor()
