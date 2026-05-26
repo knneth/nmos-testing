@@ -1844,7 +1844,7 @@ class MatroxSdp:
         return None
 
     def process_parameter_sprop_parameter_sets(self, value: bytes) -> Optional[str]:
-        self.current_media.h264_parameter_sets = value.decode('utf-8')
+        self.current_media.h264_parameter_sets = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_packetization_mode(self, value: bytes) -> Optional[str]:
@@ -1930,15 +1930,15 @@ class MatroxSdp:
         return None
 
     def process_parameter_sprop_vps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_vps = value.decode('utf-8')
+        self.current_media.h265_vps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_sps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_sps = value.decode('utf-8')
+        self.current_media.h265_sps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_pps(self, value: bytes) -> Optional[str]:
-        self.current_media.h265_pps = value.decode('utf-8')
+        self.current_media.h265_pps = value.decode('utf-8') if value else ""
         return None
 
     def process_parameter_sprop_depack_buf_nalus(self, value: bytes) -> Optional[str]:
@@ -1969,7 +1969,7 @@ class MatroxSdp:
     def check_sdp_base_requirements(self) -> Optional[str]:
         if not self.username or not self.session_id or not self.session_version or not self.origin_address:
             return "missing o= line"
-        if self.session_name is None:
+        if not self.session_name:
             return "missing s= line"
         if self.primary_media.protocol and self.primary_media.protocol.s in ("RTP/AVP", "TCP/RTP/AVP"):
             if (self.primary_media.port % 2) != 0 and not self.primary_media.rtcp_port:
@@ -1987,7 +1987,7 @@ class MatroxSdp:
             if self.secondary_media is not None:
                 if not self.secondary_media.rtcp_port and self.secondary_media.port:
                     self.secondary_media.rtcp_port = self.secondary_media.port + 1
-        return None        
+        return None
 
 
 def get_h264_profile_level_from_sdp(profile_level_id: str) -> Tuple[EnumId, EnumId]:

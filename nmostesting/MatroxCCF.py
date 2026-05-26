@@ -1,29 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# Copyright (c) 2025, Matrox Graphics Inc.
-# All rights reserved.
+# Copyright (C) 2025 Matrox Graphics Inc.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions, and the following disclaimer.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions, and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
   
 """ Constraint-Capability Framework (CCF)
 
@@ -1975,6 +1965,50 @@ def cap_constrict_by_con(x_cap: Capability, y_con: Constraint) -> Capability:
 
 # (C) Constriction with adjustment: x <& y
 
+def are_native_in_pyramid(caps: Caps) -> bool:
+    """
+    Structural check used by x_caps <& y_conset to decide whether a
+    native CapSet (preference==100) may be safely skipped when the
+    Y conset is non-native.
+
+    The "pyramid" assumption: every native CapSet N in caps is contained
+    (per <=) in at least one non-native CapSet with the same format/layer.
+    Under this assumption, any receiver query Y that intersects N also
+    intersects the enclosing alternative, so letting the alternative
+    represent N in non-native buckets loses no information.
+
+    Returns:
+      True  -- every native CapSet has at least one non-native CapSet
+               (same part) that contains it. Pyramid holds; skipping
+               natives during non-native matching is information-preserving.
+      False -- at least one native has no covering non-native alternative
+               (including the degenerate case of no non-native alternatives
+               at all). Skipping natives would discard valid matches, so
+               the caller must fall back to pure <& semantics.
+    """
+    for native in caps.capsets:
+        if native.preference != 100:
+            continue
+
+        native.check_part_valid()
+
+        covered = False
+        for alt in caps.capsets:
+            if alt is native:
+                continue
+            if alt.preference == 100:
+                continue
+            if not alt.is_same_part(native):
+                continue
+            if capset_included_in_capset(native, alt):
+                covered = True
+                break
+
+        if not covered:
+            return False
+
+    return True
+
 def caps_constrict_adjust_by_cons(x_caps: Caps, y_cons: Cons) -> Caps:
     """
     Implements x_caps <& y_cons
@@ -2014,6 +2048,13 @@ def caps_constrict_adjust_by_conset(x_caps: Caps, y_conset: ConSet) -> CapSet:
     """
     y_conset.check_part_valid()
 
+    # Pyramid guard: skipping a native X only preserves the <& algebra
+    # when every native is covered by a non-native alternative. If the
+    # pyramid does not hold, we must let natives participate — otherwise
+    # a non-native Y that intersects only at the native point is silently
+    # dropped. Computed once; invariant across the loop.
+    pyramid = are_native_in_pyramid(x_caps)
+
     r_capset = None
     for capset in x_caps.capsets:
 
@@ -2023,8 +2064,9 @@ def caps_constrict_adjust_by_conset(x_caps: Caps, y_conset: ConSet) -> CapSet:
         try:
             # We special case preference of 100 as it indicates a native set. We intersect an X native
             # set only with a Y native set. We allow a Y native set to intersect with any set because
-			# it remains a set of the Y preference. Others intersect without considering the preference.
-            if y_conset.preference != 100 and capset.preference == 100:
+            # it remains a set of the Y preference. Others intersect without considering the preference.
+            # Gated on the pyramid structure holding — otherwise skipping natives loses valid matches.
+            if pyramid and y_conset.preference != 100 and capset.preference == 100:
                 continue
 
             r_capset = capset_constrict_adjust_by_conset(capset, y_conset)
@@ -2419,6 +2461,92 @@ def namespace_of_conset(x_conset: ConSet) -> Set[str]:
     x_conset.check_part_valid()
 
     return x_conset.namespace()
+
+def convert_caps_caps_to_json(caps: Caps) -> Dict[str, Any]:
+    """
+    Inverse of ``convert_caps_json_to_caps`` — serialize a Caps
+    dataclass back to NMOS sender/receiver ``caps`` JSON shape:
+
+        {"constraint_sets": [
+            {
+                "urn:x-nmos:cap:meta:label":          "...",
+                "urn:x-nmos:cap:meta:preference":     <int>,
+                "urn:x-matrox:cap:meta:format":       "urn:x-nmos:format:video",
+                "urn:x-matrox:cap:meta:layer":        <int>,
+                "urn:x-matrox:cap:meta:layer_compatibility_groups": [<int>, ...],
+                "urn:x-nmos:cap:format:media_type":   {"enum": ["video/raw"]},
+                "urn:x-nmos:cap:format:frame_width":  {"minimum": 1920, "maximum": 3840},
+                ...
+            },
+            ...
+        ]}
+
+    Round-trip identity (modulo what CCF stores):
+
+        convert_caps_caps_to_json(convert_caps_json_to_caps(js))  ≈  js
+
+    Rules:
+      * Meta fields use the same URNs the forward converter reads
+        (``CapMetaLabel``, ``CapMetaPreference``, ``CapMetaFormat``,
+        ``CapMetaLayer``, ``CapMetaLayerCompatibilityGroups``). Format
+        and layer are omitted when ``None`` (unset); everything else
+        is always emitted.
+      * A ``RangeValue`` serialises to an NMOS constraint dict:
+          - ``infinite`` → ``{}`` (the URN is present but unconstrained
+            — mirrors the forward converter's ``infinite=True`` on an
+            empty constraint dict).
+          - ``enum`` values → ``{"enum": [...]}``; rational Fractions
+            are emitted as ``{"numerator", "denominator"}`` dicts to
+            match the BCP-004-01 rational shape.
+          - ``min`` / ``max`` set → ``{"minimum": X, "maximum": Y}``
+            (either bound independently).
+
+    Used by the controller to render the intersection of sender and
+    receiver caps: the intersection algorithm runs in CCF (via
+    ``caps_constrict_by_cons`` wrapped around a single sender capset),
+    and the narrowed result comes back through this helper into NMOS
+    JSON so ``_build_caps_view`` / ``_build_configure_view`` can
+    treat it like any other sender ``caps``.
+    """
+    from fractions import Fraction
+
+    def _value_to_json(v: Any) -> Any:
+        if isinstance(v, Fraction):
+            return {"numerator": v.numerator, "denominator": v.denominator}
+        return v
+
+    def _range_to_json(rv: RangeValue) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if rv.infinite:
+            return out  # present but unconstrained
+        if rv.values is not None and len(rv.values) > 0:
+            out["enum"] = [_value_to_json(v) for v in rv.values]
+        if rv.min is not None:
+            out["minimum"] = _value_to_json(rv.min)
+        if rv.max is not None:
+            out["maximum"] = _value_to_json(rv.max)
+        return out
+
+    constraint_sets: List[Dict[str, Any]] = []
+    for capset in caps.capsets:
+        cs_json: Dict[str, Any] = {}
+        cs_json[CapMetaLabel] = capset.label
+        cs_json[CapMetaPreference] = capset.preference
+        if capset.format is not None:
+            cs_json[CapMetaFormat] = capset.format
+        if capset.layer is not None:
+            cs_json[CapMetaLayer] = capset.layer
+        if capset.layer_compatibility_groups is not None:
+            # CapSet holds a ``Set[int]``; JSON needs a stable list.
+            cs_json[CapMetaLayerCompatibilityGroups] = sorted(
+                capset.layer_compatibility_groups,
+            )
+        for cap_name, cap in capset.caps.items():
+            cs_json[cap_name] = _range_to_json(cap.value)
+        constraint_sets.append(cs_json)
+
+    return {"constraint_sets": constraint_sets}
+
 
 def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
     """

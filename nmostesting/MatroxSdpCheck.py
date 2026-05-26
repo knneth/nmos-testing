@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .MatroxSdp import MediaDescriptor, MatroxSdpEnums
+try:
+    from .MatroxSdp import MediaDescriptor, MatroxSdpEnums
+except ImportError:
+    from MatroxSdp import MediaDescriptor, MatroxSdpEnums
 
 class SdpCheckError(Exception):
     """Custom exception for SDP validation errors."""
