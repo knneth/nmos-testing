@@ -70,6 +70,7 @@ class IS11TestAnalyzer:
         self.environment_spec = None
         self.final_verdict = None
         self.failure_reasons = []
+        self.warnings = []
 
     def load_results(self) -> bool:
         """Load and parse the JSON test results file"""
@@ -483,9 +484,22 @@ class IS11TestAnalyzer:
 
             if self.environment_spec.edid_supported:
                 # Device supports EDID - EDID tests should PASS
+                # Exception: for test_02_03_05_01 and test_02_03_05_02, a
+                # COULD_NOT_TEST result whose detail carries the
+                # "### but the EDID is VALID ###" marker is acceptable. The EDID
+                # was validated successfully, so we treat the test as PASS and
+                # surface a warning instead of failing the device.
+                edid_valid_waivable = ('test_02_03_05_01', 'test_02_03_05_02')
                 for test_name in edid_input_tests:
                     test_result = self.get_test_result(test_name)
                     if test_result and test_result.state != TestState.PASS:
+                        if (test_name in edid_valid_waivable
+                                and test_result.state == TestState.COULD_NOT_TEST
+                                and "### but the EDID is VALID ###" in test_result.detail):
+                            self.warnings.append(
+                                f"{test_name} reported '{test_result.state.value}' but the EDID is VALID; "
+                                "treated as PASS")
+                            continue
                         failures.append(f"{test_name} must PASS for sender with inputs and EDID support. "
                                         f"Result is {test_result.state}{self._detail_tag(test_result)}")
             else:
@@ -616,6 +630,11 @@ class IS11TestAnalyzer:
             print("\nFailure reasons:")
             for i, reason in enumerate(self.failure_reasons, 1):
                 print(f"{i}. {reason}")
+
+        if self.warnings:
+            print("\nWarnings:")
+            for i, warning in enumerate(self.warnings, 1):
+                print(f"{i}. {warning}")
 
     def run_analysis(self):
         """Run the complete analysis"""
