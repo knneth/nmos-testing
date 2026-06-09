@@ -59,6 +59,8 @@ from ipmx_validate_common import (
     extract_interlace_from_sr,
     extract_video_params_from_sr,
     filter_capture_boundary_orphan_srs,
+    apply_recovery_point_window,
+    print_recovery_window_note,
     get_int_field,
     compute_sr_prefix_length,
     infer_rtp_port,
@@ -257,6 +259,10 @@ def build_context(args: argparse.Namespace) -> ValidationContext:
         au_ts = {au.timestamp for au in rtp_report.access_units}
         sender_reports = [sr for sr in sender_reports if sr.rtp_timestamp in au_ts]
     timeline = build_timeline(rtp_report, "h265", args.frames)
+    # Restrict AU-based checks to the cleanly-validatable window (first
+    # recovery point .. last marker-complete AU). Done AFTER build_timeline so
+    # HRD trace correlation still sees the full AU/NAL stream.
+    apply_recovery_point_window(rtp_report)
 
     exact_fr: Fraction | None = None
     if getattr(args, "exactframerate", None):
@@ -418,11 +424,17 @@ def nal_layer_ids(report: ValidationContext) -> list[int]:
 def check_sr_mapping(ctx: ValidationContext) -> tuple[bool, str]:
     if not ctx.sender_reports:
         return False, "No RTCP Sender Reports detected"
-    au_by_ts = ctx.rtp_report.access_units_by_ts
-    missing = []
-    for au in ctx.rtp_report.access_units:
-        if au.timestamp not in {sr.rtp_timestamp for sr in ctx.sender_reports}:
-            missing.append(au.timestamp)
+    rep = ctx.rtp_report
+    au_by_ts = rep.access_units_by_ts
+    sr_timestamps = {sr.rtp_timestamp for sr in ctx.sender_reports}
+    aus = rep.access_units
+    # AUs are restricted to the recovery-point window. The window's first AU is
+    # a recovery point with captured pre-roll before it, so its SR is in-window
+    # — UNLESS no pre-roll was dropped, i.e. it is the capture's very first AU,
+    # whose SR (sent just before it) may predate the capture. Exempt only that
+    # one boundary AU; every other windowed AU must carry its SR.
+    checked = aus[1:] if (aus and rep.dropped_pre_recovery == 0) else aus
+    missing = [au.timestamp for au in checked if au.timestamp not in sr_timestamps]
     if missing:
         return False, f"Missing SRs for {len(missing)} access units"
     unknown = [sr for sr in ctx.sender_reports if sr.rtp_timestamp not in au_by_ts]
@@ -2184,6 +2196,7 @@ def main() -> int:
         raise SystemExit("--max-access-units must be positive")
 
     ctx = build_context(args)
+    print_recovery_window_note(ctx.rtp_report)
     if ctx.timeline is not None and ctx.timeline.trace_warning:
         print(ctx.timeline.trace_warning, file=sys.stderr)
     if ctx.encrypted:

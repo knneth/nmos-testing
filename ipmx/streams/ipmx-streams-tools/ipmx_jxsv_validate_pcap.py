@@ -442,6 +442,7 @@ class JXSVFrameInfo:
     first_capture_time: float | None
     last_capture_time: float | None
     marker_seen: bool
+    first_absolute_index: int = -1
     issues: list[str] = field(default_factory=list)
 
 
@@ -485,6 +486,7 @@ def _frame_from_report(d: dict[str, Any]) -> JXSVFrameInfo:
         first_capture_time=d.get("first_capture_time"),
         last_capture_time=d.get("last_capture_time"),
         marker_seen=d.get("marker_seen", False),
+        first_absolute_index=d.get("first_absolute_index", -1),
         issues=list(d.get("issues", [])),
     )
 
@@ -1547,9 +1549,13 @@ def check_sr_mapping(ctx: JXSVValidationContext) -> tuple[bool, str]:
     if not ctx.sender_reports:
         return False, "No RTCP Sender Reports detected"
     sr_timestamps = {sr.rtp_timestamp for sr in ctx.sender_reports}
-    missing = [f.timestamp for f in ctx.frames if f.timestamp not in sr_timestamps]
+    # Only fully-captured frames can be required to have an SR within the
+    # capture window: a head-truncated first frame or tail-truncated last
+    # frame may have its SR fall outside the capture (see _complete_frames).
+    complete = _complete_frames(ctx)
+    missing = [f.timestamp for f in complete if f.timestamp not in sr_timestamps]
     if missing:
-        return False, f"Missing SRs for {len(missing)}/{len(ctx.frames)} frames"
+        return False, f"Missing SRs for {len(missing)}/{len(complete)} frames"
     unknown = [sr for sr in ctx.sender_reports if sr.rtp_timestamp not in ctx.frames_by_ts]
     if unknown:
         last_frame_time = max(
@@ -1647,11 +1653,23 @@ def check_au_interval_const(ctx: JXSVValidationContext) -> tuple[bool, str]:
 
 
 def _complete_frames(ctx: JXSVValidationContext) -> list[JXSVFrameInfo]:
-    """Return only frames that are fully captured (have marker and no seq gaps)."""
+    """Return only frames that are fully captured at both head and tail.
+
+    A capture rarely starts or ends exactly on a frame boundary:
+      - The last frame is tail-truncated when it ends without the RTP marker
+        bit (M=1 / L=1, RFC 9134 §4.3).
+      - The first frame is head-truncated when the capture began mid-frame, so
+        its first captured packet's JPEG XS packet counter is not 0
+        (first_absolute_index != 0, RFC 9134 §4.3). Such a frame can still
+        carry the marker bit and many packets, so a marker/packet-count test
+        alone does not catch it.
+    Partial boundary frames are dropped here so constancy checks
+    (RFC9134-CBR-PKT, TR-10-11-CBR) only see fully-captured frames.
+    """
     frames = list(ctx.frames)
     if frames and not frames[-1].marker_seen:
         frames = frames[:-1]
-    if frames and frames[0].packet_count == 1 and not frames[0].marker_seen:
+    if frames and frames[0].first_absolute_index != 0:
         frames = frames[1:]
     return frames
 
@@ -2034,7 +2052,7 @@ def _run_cmax_check(ctx: JXSVValidationContext) -> list[RequirementResult]:
         ))
         return results
 
-    complete_frames = [f for f in ctx.frames if f.marker_seen]
+    complete_frames = _complete_frames(ctx)
     if not complete_frames:
         results.append(RequirementResult(
             req_id="TR-10-1-8.1-CMAX", level="shall",

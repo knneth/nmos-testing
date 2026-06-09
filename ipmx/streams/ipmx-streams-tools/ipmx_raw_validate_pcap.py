@@ -148,6 +148,7 @@ class RawFrameInfo:
     marker_seen: bool
     min_row_number: int
     max_row_number: int
+    head_seen: bool = False
     field_ids: list[int] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
 
@@ -198,6 +199,7 @@ def _frame_from_report(d: dict[str, Any]) -> RawFrameInfo:
         marker_seen=d.get("marker_seen", False),
         min_row_number=d.get("min_row_number", 0),
         max_row_number=d.get("max_row_number", 0),
+        head_seen=d.get("head_seen", True),
         field_ids=list(d.get("field_ids", [])),
         issues=list(d.get("issues", [])),
     )
@@ -872,9 +874,13 @@ def check_sr_mapping(ctx: RawValidationContext) -> tuple[bool, str]:
     if not ctx.sender_reports:
         return False, "No RTCP Sender Reports detected"
     sr_timestamps = {sr.rtp_timestamp for sr in ctx.sender_reports}
-    missing = [f.timestamp for f in ctx.frames if f.timestamp not in sr_timestamps]
+    # Only fully-captured frames can be required to have an SR within the
+    # capture window: a head-truncated first frame or tail-truncated last
+    # frame may have its SR fall outside the capture (see _complete_frames).
+    complete = _complete_frames(ctx)
+    missing = [f.timestamp for f in complete if f.timestamp not in sr_timestamps]
     if missing:
-        return False, f"Missing SRs for {len(missing)}/{len(ctx.frames)} frames"
+        return False, f"Missing SRs for {len(missing)}/{len(complete)} frames"
     unknown = [sr for sr in ctx.sender_reports if sr.rtp_timestamp not in ctx.frames_by_ts]
     if unknown:
         last_frame_time = max(
@@ -971,11 +977,22 @@ def check_au_interval_const(ctx: RawValidationContext) -> tuple[bool, str]:
 
 
 def _complete_frames(ctx: RawValidationContext) -> list[RawFrameInfo]:
-    """Return only frames that are fully captured."""
+    """Return only frames that are fully captured at both head and tail.
+
+    A capture rarely starts or ends exactly on a frame boundary:
+      - The last frame is tail-truncated when it ends without the RTP marker
+        bit (M=1, ST 2110-20 §6.1.2).
+      - The first frame is head-truncated when the capture began mid-frame, so
+        its first sample (row 0, offset 0) was never captured
+        (head_seen is False). Such a frame can still carry the marker bit and
+        many packets, so a marker/packet-count test alone misses it.
+    Partial boundary frames are dropped here so the per-frame size check and
+    the CBR/CMAX models only see fully-captured frames.
+    """
     frames = list(ctx.frames)
     if frames and not frames[-1].marker_seen:
         frames = frames[:-1]
-    if frames and frames[0].packet_count == 1 and not frames[0].marker_seen:
+    if frames and not frames[0].head_seen:
         frames = frames[1:]
     return frames
 
@@ -1321,7 +1338,7 @@ def _run_cmax_check(ctx: RawValidationContext) -> list[RequirementResult]:
         ))
         return results
 
-    complete_frames = [f for f in ctx.frames if f.marker_seen]
+    complete_frames = _complete_frames(ctx)
     if not complete_frames:
         results.append(RequirementResult(
             req_id="TR-10-1-8.1-CMAX", level="shall",

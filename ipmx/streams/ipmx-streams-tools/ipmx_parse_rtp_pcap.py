@@ -215,6 +215,7 @@ class JXSVFrameState:
     packet_count: int = 0
     total_payload_bytes: int = 0
     marker_seen: bool = False
+    first_absolute_index: int = -1
     last_p_counter: int = -1
     last_sep_counter: int = 0
     last_absolute_index: int = -1
@@ -335,6 +336,7 @@ def process_jxsv_stream(
             "first_capture_time": frm.first_capture_time,
             "last_capture_time": frm.last_capture_time,
             "marker_seen": frm.marker_seen,
+            "first_absolute_index": frm.first_absolute_index,
             "issues": frm.issues,
         }
         stream.frame_count += 1
@@ -431,6 +433,7 @@ def process_jxsv_stream(
                 last_seq=pkt.seq,
                 first_capture_time=pkt.capture_time,
                 last_capture_time=pkt.capture_time,
+                first_absolute_index=jxsv.absolute_packet_index(),
             )
 
         assert current_frame is not None
@@ -616,6 +619,7 @@ class RawFrameState:
     packet_count: int = 0
     total_data_bytes: int = 0
     marker_seen: bool = False
+    head_seen: bool = False
     observed_field_ids: set[int] = field(default_factory=set)
     max_row_number: int = -1
     min_row_number: int = 0x7FFF
@@ -675,6 +679,11 @@ def _validate_raw_srd_headers(
             frame.max_row_number = hdr.row_number
         if hdr.row_number < frame.min_row_number:
             frame.min_row_number = hdr.row_number
+        # The frame's head is captured only if its very first sample
+        # (row 0, offset 0 of the field) is present. A capture that starts
+        # mid-frame misses it (ST 2110-20 §6.1.4-6.1.5 row/offset ordering).
+        if hdr.row_number == 0 and hdr.offset == 0:
+            frame.head_seen = True
 
         frame.observed_field_ids.add(hdr.field_id)
 
@@ -729,6 +738,7 @@ def process_raw_stream(
             "first_capture_time": frm.first_capture_time,
             "last_capture_time": frm.last_capture_time,
             "marker_seen": frm.marker_seen,
+            "head_seen": frm.head_seen,
             "min_row_number": frm.min_row_number if frm.min_row_number != 0x7FFF else 0,
             "max_row_number": frm.max_row_number if frm.max_row_number >= 0 else 0,
             "issues": frm.issues,
@@ -1357,6 +1367,22 @@ def is_vcl_nal(codec: str, nal_type: int) -> bool:
     if codec == "h264":
         return 1 <= nal_type <= 5
     return 0 <= nal_type <= 31
+
+
+def is_recovery_point_nal(codec: str, nal_type: int) -> bool:
+    """True if the NAL type is a clean random-access / recovery point.
+
+    These mark an access unit at which a decoder can begin cleanly, so they
+    are the deterministic anchor for the start of a mid-stream capture:
+      - H.264: IDR (NAL unit type 5) — ITU-T H.264 Table 7-1.
+      - H.265: IRAP pictures (NAL unit types 16-21: BLA_W_LP..CRA_NUT) —
+        ITU-T H.265 Table 7-1.
+    Note: this covers closed-GOP random access. Open-GOP gradual decoding
+    refresh signalled only via a recovery_point SEI is not detected here.
+    """
+    if codec == "h264":
+        return nal_type == 5
+    return 16 <= nal_type <= 21
 
 
 def _extract_size_prefixed_nal_types(codec: str, payload: bytes, offset: int) -> list[int]:

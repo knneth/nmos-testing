@@ -1333,21 +1333,20 @@ def check_sr_counts(ctx: Am824ValidationContext) -> tuple[bool, str]:
         cumulative_octets += len(packet.payload)
         octets_by_packet.append(cumulative_octets)
 
-    # Detect zero-based vs one-based packet counter from the first SR.
-    # Real implementations commonly start packet_count at 0 (before the
-    # associated packet) rather than 1 (after), so accept either convention
-    # as long as the offset is consistent across all SRs.
+    # The SR packet/octet counters are cumulative from the start of the RTP
+    # stream (RFC 3550 §6.4.1: "total number ... since starting transmission"),
+    # which may precede the start of the capture when the PCAP begins
+    # mid-stream. Anchor the counter offset on the first captured SR rather
+    # than assuming the capture begins at stream packet 1, then require every
+    # subsequent SR to be consistent with that same offset. This keeps the
+    # cross-SR increment invariant verifiable on partial captures (analogous to
+    # trimming boundary frames in the video validators) while still absorbing
+    # the 0-based-vs-1-based counter convention. The octet expectation stays
+    # tied to pkt_offset * payload_size, so packet/octet mutual consistency is
+    # still enforced (this identity holds for both counter conventions and for
+    # mid-stream offsets, given the constant AM824 payload size).
     first_report, first_idx = associations[0]
-    one_based_count = first_idx + 1
-    if first_report.packet_count == one_based_count:
-        pkt_offset = 0
-    elif first_report.packet_count == first_idx:
-        pkt_offset = -1
-    else:
-        return False, (
-            f"SR for packet index {first_idx} reports packet_count={first_report.packet_count}, "
-            f"expected {one_based_count} (1-based) or {first_idx} (0-based)"
-        )
+    pkt_offset = first_report.packet_count - (first_idx + 1)
 
     payload_size = len(ctx.rtp_packets[0].payload) if ctx.rtp_packets else 0
 
@@ -1364,7 +1363,12 @@ def check_sr_counts(ctx: Am824ValidationContext) -> tuple[bool, str]:
                 f"SR for packet index {packet_index} reports octet_count={report.octet_count}, "
                 f"expected {expected_octet_count}"
             )
-    basis = "0-based" if pkt_offset == -1 else "1-based"
+    if pkt_offset == 0:
+        basis = "1-based, capture from stream start"
+    elif pkt_offset == -1:
+        basis = "0-based, capture from stream start"
+    else:
+        basis = f"consistent counter offset {pkt_offset:+d} (capture started mid-stream)"
     return True, f"SR packet_count and octet_count match cumulative RTP payload counters ({basis})"
 
 

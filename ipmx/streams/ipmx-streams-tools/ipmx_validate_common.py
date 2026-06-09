@@ -115,6 +115,8 @@ class AccessUnit:
     last_packet_time: float | None
     nal_types: set[int]
     packet_count: int
+    marker_seen: bool = False
+    recovery_point: bool = False
 
 
 @dataclass
@@ -163,6 +165,12 @@ class RtpReport:
     has_rtp_extensions: bool = False
     ext_ids: set[int] = field(default_factory=set)
     encrypted: bool = False
+    # Recovery-point capture window (populated by apply_recovery_point_window):
+    # how many boundary AUs were excluded so that all AU-based checks see only
+    # the cleanly-decodable, fully-captured AUs of a mid-stream PCAP.
+    dropped_pre_recovery: int = 0      # AUs before the first IRAP/IDR
+    dropped_tail_truncated: int = 0    # trailing AUs ending without an RTP marker
+    recovery_point_found: bool = True  # False => no IRAP/IDR in capture (head not trimmed)
 
 
 @dataclass
@@ -366,6 +374,78 @@ def filter_capture_boundary_orphan_srs(
     return real
 
 
+def apply_recovery_point_window(report: RtpReport) -> RtpReport:
+    """Restrict ``report.access_units`` to the cleanly-validatable capture window.
+
+    A mid-stream PCAP rarely starts or stops on a clean boundary, so its
+    leading and trailing access units are not meaningfully validatable:
+      - **Head** — AUs before the first recovery point (IRAP/IDR) reference
+        frames that were never captured and carry no parameter sets, so a
+        decoder could not start there. We anchor the window at the first AU
+        flagged ``recovery_point`` (deterministic NAL-type test, ITU-T H.264 /
+        H.265 Table 7-1). If the capture contains no recovery point the head is
+        left intact (``recovery_point_found = False``) so we never silently
+        validate nothing.
+      - **Tail** — a capture cut mid-AU leaves the final AU without its RTP
+        marker (M=1 marks an AU's last packet, RFC 6184 §5.1 / RFC 7798 §4.4).
+        Trailing AUs lacking the marker are dropped. Interior markerless AUs
+        are NOT dropped — those indicate real loss, surfaced elsewhere.
+
+    Mutates and returns ``report``: ``access_units`` is trimmed and re-indexed,
+    ``access_units_by_ts`` is rebuilt, and the drop counts are recorded on the
+    report. Per-packet/NAL lists are left untouched so HRD timeline correlation
+    (which is 1:1 with the full ``nalus_bytes``) stays intact — callers must
+    apply this only AFTER building the timeline.
+    """
+    aus = report.access_units
+    if not aus:
+        return report
+
+    # --- Head: first recovery point ---
+    head = next((i for i, au in enumerate(aus) if au.recovery_point), None)
+    if head is None:
+        report.recovery_point_found = False
+        head = 0
+    else:
+        report.recovery_point_found = True
+    report.dropped_pre_recovery = head
+
+    windowed = aus[head:]
+
+    # --- Tail: drop trailing AUs that end without an RTP marker ---
+    # Only when markers are in use at all (else this would drop everything).
+    dropped_tail = 0
+    if any(au.marker_seen for au in windowed):
+        while windowed and not windowed[-1].marker_seen:
+            windowed.pop()
+            dropped_tail += 1
+    report.dropped_tail_truncated = dropped_tail
+
+    for idx, au in enumerate(windowed):
+        au.index = idx
+    report.access_units = windowed
+    report.access_units_by_ts = {au.timestamp: au for au in windowed}
+    return report
+
+
+def print_recovery_window_note(report: RtpReport) -> None:
+    """Surface what the recovery-point window excluded (never silently)."""
+    if not report.recovery_point_found:
+        print(
+            f"[INFO] No recovery point (IRAP/IDR) in capture; validating all "
+            f"{len(report.access_units)} access unit(s) without head trim "
+            f"(mid-GOP start cannot be cleanly anchored)."
+        )
+        return
+    if report.dropped_pre_recovery or report.dropped_tail_truncated:
+        print(
+            f"[INFO] Recovery-point window: skipped "
+            f"{report.dropped_pre_recovery} pre-IRAP and "
+            f"{report.dropped_tail_truncated} tail-truncated access unit(s); "
+            f"validating {len(report.access_units)} access unit(s)."
+        )
+
+
 def infer_rtp_port(pcap_path: Path, codec: str) -> int | None:
     counts: Counter[int] = Counter()
     vcl_counts: Counter[int] = Counter()
@@ -545,6 +625,9 @@ def build_rtp_report(
                 au.first_packet_time = cap_time
             if au.last_packet_time is None or cap_time > au.last_packet_time:
                 au.last_packet_time = cap_time
+        if meta.get("marker"):
+            # RFC 6184 §5.1 / RFC 7798 §4.4: M=1 marks an AU's last packet.
+            au.marker_seen = True
         au.nal_types.update(int(nal) for nal in meta.get("nal_types", []))
 
     # Order access units by first_packet_time if available, otherwise by RTP timestamp order.
@@ -557,6 +640,10 @@ def build_rtp_report(
     )
     for idx, au in enumerate(access_units):
         au.index = idx
+        au.recovery_point = any(
+            ipmx_parse_rtp_pcap.is_recovery_point_nal(codec, nal)
+            for nal in au.nal_types
+        )
 
     has_rtp_extensions = False
     all_ext_ids: set[int] = set()
