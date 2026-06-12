@@ -452,8 +452,10 @@ SPECIFICATIONS = {
     },
     "nmos-parameter-registers": {
         "repo": "nmos-parameter-registers",
-        "versions": ["main"],
-        "default_version": "main",
+        "url": "https://github.com/alabou/",
+        "branch": "IPMX",
+        "versions": ["IPMX"],
+        "default_version": "IPMX",
         "apis": {
             "caps-register": {
                 "name": "Capabilities Register"
