@@ -71,7 +71,7 @@
             "cwd": "${workspaceFolder}",
             "console": "internalConsole",
             "justMyCode": true,
-            "args": ["suite", "IPMX-Sdp",  "--tests", "test_07", "--host",  "127.0.0.1",  "127.0.0.1", "127.0.0.1", "--port", "8443", "7051", "7051", "--version", "v1.3", "v1.3", "v1.1"],
+            "args": ["suite", "IPMX-Sdp",  "--tests", "test_06", "--host",  "127.0.0.1",  "127.0.0.1", "127.0.0.1", "--port", "8443", "7051", "7051", "--version", "v1.3", "v1.3", "v1.1"],
             "env": {"PYDEVD_DISABLE_FILE_VALIDATION": "1"}
         }
     ]

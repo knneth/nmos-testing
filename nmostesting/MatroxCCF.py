@@ -66,6 +66,7 @@ CapFormatBitRate = "urn:x-nmos:cap:format:bit_rate"
 CapFormatProfile = "urn:x-nmos:cap:format:profile"
 CapFormatLevel = "urn:x-nmos:cap:format:level"
 CapFormatSublevel = "urn:x-nmos:cap:format:sublevel"
+CapFormatFbblevel = "urn:x-nmos:cap:format:fbblevel"
 CapFormatConstantBitRate = "urn:x-nmos:cap:format:constant_bit_rate"
 CapFormatVideoLayers = "urn:x-matrox:cap:format:video_layers"
 CapFormatAudioLayers = "urn:x-matrox:cap:format:audio_layers"
@@ -396,10 +397,13 @@ class RangeValue:
     def has_enum_exception(self) -> bool:
         return self.values is not None and len(self.values) == 0
     
-    def includes_value(self, val: Union[bool, int, float, Fraction, str]) -> bool:
+    def includes_value(self, val: Union[bool, int, float, Fraction, str], finite: bool = False) -> bool:
         """Used to test membership."""
 
         _verify_value_type(self, val)
+
+        if finite and self.is_infinite():
+            return False
 
         if self.empty:
             return False
@@ -2582,6 +2586,7 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
 	    CapFormatProfile: RangeType.STRING,
 	    CapFormatLevel: RangeType.STRING,
 	    CapFormatSublevel: RangeType.STRING,
+	    CapFormatFbblevel: RangeType.STRING,
 	    CapFormatConstantBitRate: RangeType.BOOL,
 	    CapFormatVideoLayers: RangeType.INT,
 	    CapFormatAudioLayers: RangeType.INT,
