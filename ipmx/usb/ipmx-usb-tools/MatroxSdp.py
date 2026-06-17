@@ -271,6 +271,7 @@ class MatroxSdpEnums(Enum):
     JxsvProfileMain444_12  = EnumId("Main444.12")
     JxsvProfileMain4444_12 = EnumId("Main4444.12")
     JxsvProfileHigh444_12  = EnumId("High444.12")
+    JxsvProfileTDC444_12   = EnumId("TDC444.12")
     JxsvProfileHigh4444_12 = EnumId("High4444.12")
     JxsvLevel1k1           = EnumId("1k-1")
     JxsvLevel2k1           = EnumId("2k-1")
@@ -286,6 +287,15 @@ class MatroxSdpEnums(Enum):
     JxsvSublevel6bpp       = EnumId("Sublev6bpp")
     JxsvSublevel9bpp       = EnumId("Sublev9bpp")
     JxsvSublevel12bpp      = EnumId("Sublev12bpp")
+    # JPEG XS FBB (frame buffer) levels (ISO/IEC 21122-2,
+    # draft-ietf-avtcore-rtp-jpegxs-3ed-02 §7.1)
+    JxsvFbblevelUnrestricted = EnumId("Unrestricted")
+    JxsvFbblevelFull         = EnumId("FbblevFull")
+    JxsvFbblevel3bpp         = EnumId("Fbblev3bpp")
+    JxsvFbblevel4_5bpp       = EnumId("Fbblev4.5bpp")
+    JxsvFbblevel8bpp       = EnumId("Fbblev8bpp")
+    JxsvFbblevel12bpp      = EnumId("Fbblev12bpp")
+
     H265TxModeSRST = EnumId("SRST")
     H265TxModeMRST = EnumId("MRST")
     H265TxModeMRMT = EnumId("MRMT")
@@ -301,7 +311,7 @@ class MatroxSdpEnums(Enum):
     H265ProfileMain12 = EnumId("Main12")
     H265ProfileMain10_422 = EnumId("Main10-422")
     H265ProfileMain12_422 = EnumId("Main12-422")
-    H265ProfileMain_444 = EnumId("Main444")
+    H265ProfileMain_444 = EnumId("Main-444")
     H265ProfileMain10_444 = EnumId("Main10-444")
     H265ProfileMain12_444 = EnumId("Main12-444")
     H265ProfileMainIntra = EnumId("MainIntra")
@@ -537,6 +547,7 @@ class MediaDescriptor:
         self.profile: Optional[EnumId] = None
         self.level: Optional[EnumId] = None
         self.sub_level: Optional[EnumId] = None
+        self.fbb_level: Optional[EnumId] = None
         self.jxsv_trans_mode: Optional[EnumId] = None
         self.jxsv_packet_mode: Optional[EnumId] = None
         # H264/H265 Shared
@@ -996,6 +1007,7 @@ class MatroxSdp:
             self.current_media.is_connection_ipv6 = self.is_connection_ipv6
         if self.bitrate_kbits:
             self.current_media.bitrate_kbits = self.bitrate_kbits
+
         for i in range(MAX_HKEPS):
             if self.hkep_desc[i].address:
                 self.current_media.hkep_desc[i].address = self.hkep_desc[i].address
@@ -1004,9 +1016,11 @@ class MatroxSdp:
                 self.current_media.hkep_desc[i].node_id = self.hkep_desc[i].node_id
                 self.current_media.hkep_desc[i].port_id = self.hkep_desc[i].port_id
                 self.current_media.hkep = True
+
         if self.privacy_desc.protocol:
             self.current_media.privacy_desc = self.privacy_desc
             self.current_media.privacy = True
+
         if self.session_control:
             self.current_media.sub_stream_control = self.session_control
         for i in range(MAX_EXTMAPS):
@@ -1697,6 +1711,13 @@ class MatroxSdp:
         if err:
             return err
         self.current_media.sub_level = enum
+        return None
+
+    def process_parameter_fbblevel(self, value: bytes) -> Optional[str]:
+        enum, err = lookup_enum(value.decode('utf-8'), True)
+        if err:
+            return err
+        self.current_media.fbb_level = enum
         return None
 
     def process_parameter_did_sdid(self, value: bytes) -> Optional[str]:

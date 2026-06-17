@@ -25,18 +25,32 @@ from __future__ import annotations
 from io import StringIO
 from typing import Optional
 
-from MatroxSdp import (
-    MatroxSdp,
-    MatroxSdpEnums,
-    MediaDescriptor,
-    SdpError,
-    ExtmapDescriptor,
-    HkepDescriptor,
-    PrivacyDescriptor,
-    EnumId,
-    MAX_HKEPS,
-    MAX_EXTMAPS,
-)
+try:
+    from .MatroxSdp import (
+        MatroxSdp,
+        MatroxSdpEnums,
+        MediaDescriptor,
+        SdpError,
+        ExtmapDescriptor,
+        HkepDescriptor,
+        PrivacyDescriptor,
+        EnumId,
+        MAX_HKEPS,
+        MAX_EXTMAPS,
+    )
+except ImportError:
+    from MatroxSdp import (
+        MatroxSdp,
+        MatroxSdpEnums,
+        MediaDescriptor,
+        SdpError,
+        ExtmapDescriptor,
+        HkepDescriptor,
+        PrivacyDescriptor,
+        EnumId,
+        MAX_HKEPS,
+        MAX_EXTMAPS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +588,10 @@ def _emit_video_fmtp(sdp: MatroxSdp, out: StringIO, m: MediaDescriptor) -> None:
 
             if m.sub_level is not None:
                 out.write(f"{semi} sublevel={m.sub_level}")
+                semi = ";"
+
+            if m.fbb_level is not None:
+                out.write(f"{semi} fbblevel={m.fbb_level}")
                 semi = ";"
 
             if m.jxsv_packet_mode is not None:

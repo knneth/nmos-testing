@@ -23,21 +23,9 @@ with TR-10-13 privacy encryption support.
 
     python3 pcap_sender_sim.py capture.pcap [--port 5004] [--psk KEY] [--sdp FILE]
 
-### Test PCAP Generator
-
-    python3 generate_usb_test_pcap.py [--output-dir DIR]
-
 ### PEP Unit Tests
 
     python3 -m pytest test_ipmx_pep.py -v
-
-### USB Capture Conversion
-
-    python3 usb_pcap_to_ipmx.py input.pcap output.pcap
-
-### Timing Analysis
-
-    python3 analyze_timing.py timing.csv
 
 ## Debug/Interop Flags (common to dissector and tester)
 

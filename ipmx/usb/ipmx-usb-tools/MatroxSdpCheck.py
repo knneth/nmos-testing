@@ -497,7 +497,7 @@ def check_sdp_st2110_30(md: MediaDescriptor) -> None:
     if md.p_time_us == 0:
         raise SdpCheckError("ST2110-30 invalid ptime")
     
-    valid_ptimes = {125, 250, 333, 1000, 4000, 272, 363, 1088, 4354}
+    valid_ptimes = {125, 120, 250, 333, 330, 1000, 4000, 272, 270, 363, 360, 1088, 1090, 4354, 4350}
     if md.p_time_us not in valid_ptimes:
         raise SdpCheckError("ST2110-30 unexpected ptime")
     
@@ -561,6 +561,19 @@ def check_sdp_nmos(md: MediaDescriptor) -> None:
     """Check SDP compliance with NMOS. Placeholder."""
     pass
 
+def check_sdp_ipmx_usb(md: MediaDescriptor) -> None:
+    """Check SDP compliance with IPMX/USB (application/usb)."""
+    if md.type != MatroxSdpEnums.Application:
+        raise SdpCheckError("IPMX/USB requires application media type")
+    
+    if md.format_string != MatroxSdpEnums.FormatUsb:
+        raise SdpCheckError("IPMX/USB requires usb media subtype")
+    
+    if md.protocol != MatroxSdpEnums.ProtocolTCP:
+        raise SdpCheckError("IPMX/USB requires TCP protocol")
+    
+    # a=setup:passive is not verified here but it will be verified by the NMOS BCP-007-02 test suite.
+    
 
 # Example usage
 # if __name__ == "__main__":
