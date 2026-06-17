@@ -39,7 +39,9 @@
 #   Test was not run due to prior responses from the API, which may be OK, or indicate a fault
 import time
 import json
-
+import subprocess
+import os
+import platform
 from time import sleep
 
 from jsonschema import ValidationError
@@ -70,6 +72,9 @@ from ..MatroxSdpCheck import check_sdp_st2110_30
 from ..MatroxSdpCheck import check_sdp_st2110_31
 from ..MatroxSdpCheck import check_sdp_rfc6184
 from ..MatroxSdpCheck import check_sdp_rfc7798
+from ..MatroxSdpCheck import check_sdp_ipmx_usb
+
+from ..MulticastUtils import MulticastUtils, MulticastJoinError
 
 # Import SDP to CCF capabilities converter
 from ..SdpToCapabilities import SdpToCapabilitiesConverter
@@ -81,11 +86,70 @@ from ..MatroxCCF import (
     FormatVideo, FormatAudio, FormatData, FormatMux,
     CapFormatMediaType, CapFormatGrainRate, CapFormatFrameWidth, CapFormatFrameHeight,
     CapFormatInterlaceMode, CapFormatColorspace, CapFormatComponentDepth,
-    CapFormatChannelCount, CapFormatSampleRate, CapTransportBitRate,
+    CapFormatChannelCount, CapFormatSampleRate, CapTransportBitRate, CapTransportPacketTime,
+    CapFormatProfile, CapFormatLevel, CapFormatSublevel, CapFormatSampleDepth,
     CapFormatVideoLayers, CapMetaFormat, CapMetaLayer,
-    Caps, CapSet, Capability, RangeValue, RangeType, caps_constrict_by_cons, conset_included_in_caps,
-    convert_caps_json_to_caps
+    Caps, CapSet, ConSet, Con, RangeValue, RangeType, caps_constrict_by_cons,
+    conset_included_in_caps, convert_caps_json_to_caps, make_conset,
+    CapFormatColorSampling
 )
+
+# The following media type, color sampling and codec profile constants are not
+# defined in MatroxCCF, so they are defined locally here with their proper strings.
+VideoRaw = "video/raw"
+VideoJxsv = "video/jxsv"
+VideoH265 = "video/H265"
+VideoH264 = "video/H264"
+
+AudioL16 = "audio/L16"
+AudioL24 = "audio/L24"
+AudioAM824 = "audio/AM824"
+
+SamplingYCbCr_444 = "YCbCr-4:4:4"
+SamplingYCbCr_422 = "YCbCr-4:2:2"
+SamplingYCbCr_420 = "YCbCr-4:2:0"
+SamplingRGB = "RGB"
+
+JxsvProfileHigh444_12 = "High444.12"
+JxsvProfileTDC444_12 = "TDC444.12"
+CodecProfileMain = "Main"
+H265ProfileMain10 = "Main10"
+H264ProfileHigh = "High"
+H265ProfileMain10_444 = "Main10-444"
+H265ProfileMain_444 = "Main-444"
+
+# RangeType for each capability constrained in _verify_sender_ccf_required_capabilities,
+# so make_con() can wrap scalar values into properly-typed RangeValue constraints. The CCF
+# Con/Constraint object does not coerce raw values, and type inference is unsafe for the
+# RATIONAL/FLOAT caps (sample_rate, packet_time) whose values are written as ints below.
+_CON_RANGE_TYPE = {
+    CapFormatMediaType: RangeType.STRING,
+    CapFormatColorSampling: RangeType.STRING,
+    CapFormatProfile: RangeType.STRING,
+    CapFormatComponentDepth: RangeType.INT,
+    CapFormatSampleDepth: RangeType.INT,
+    CapFormatChannelCount: RangeType.INT,
+    CapFormatSampleRate: RangeType.RATIONAL,
+    CapTransportPacketTime: RangeType.FLOAT,
+}
+
+
+def make_con(name, *values):
+    """Build a CCF Con constraint enumerating one or more values for `name`, wrapping
+    them in a RangeValue with the proper RangeType (see _CON_RANGE_TYPE)."""
+    return Con(name=name, value=RangeValue(values=tuple(values), type=_CON_RANGE_TYPE[name]))
+
+
+def alt_conset(label, *cons):
+    """Build an alternative ConSet (preference 100) from Con constraints (see make_con)."""
+    return ConSet(label=label, preference=100, cons=make_conset(*cons))
+
+
+def check_conset(label, capset, *cap_names):
+    """Build the precision-check ConSet (preference 100) from a capset's existing capabilities."""
+    return ConSet(label=label, preference=100,
+                  cons=make_conset(*(capset[name] for name in cap_names)))
+
 
 QUERY_API_KEY = "query"
 NODE_API_KEY = "node"
@@ -95,6 +159,12 @@ MuxOpaque = "video/MP2T"
 MuxFullyDescribedMpeg2TS = "application/MP2T"
 MuxFullyDescribedGeneric = "application/mp2t"
 
+
+def ifelse(c, t, f):
+    if c:
+        return t
+    else:
+        return f
 
 class IpmxSdpTest(GenericTest):
     """
@@ -228,98 +298,6 @@ class IpmxSdpTest(GenericTest):
 
         return True, ctype_message
 
-    def test_01(self, test):
-        """ """
-
-        self.test = test
-
-        valid, result = self.get_is04_resources("senders")
-        if not valid:
-            return test.FAIL(result)
-
-        valid, result = self.get_is04_resources("flows")
-        if not valid:
-            return test.FAIL(result)
-
-        # Get wit video sender_id
-        sender_id = ""
-
-        for sender in self.is04_resources["senders"].values():
-            flow_id = sender['flow_id']
-            for flow in self.is04_resources["flows"].values():
-                if flow['id'] == flow_id and flow['format'] == FormatVideo:
-                    sender_id = sender['id']
-                    break
-
-        if sender_id == "":
-            return test.FAIL("cannot find a video sender")
-
-        # setup websocket notifications for senders
-        try:
-            sub_json = self.prepare_subscription("/senders")
-            resp_json = self.post_subscription(test, sub_json)
-            websocket = WebsocketWorker(resp_json["ws_href"])
-
-            websocket.start()
-            sleep(CONFIG.WS_MESSAGE_TIMEOUT)
-
-            found_initial_data_set = False
-
-            while True:
-                if websocket.did_error_occur():
-                    return test.FAIL("Error opening websocket: {}".format(websocket.get_error_message()))
-
-                received_messages = websocket.get_messages()
-
-                # Verify data inside messages
-                grain_data = list()
-
-                for curr_msg in received_messages:
-                    json_msg = json.loads(curr_msg)
-                    grain_data.extend(json_msg["grain"]["data"])
-
-                found_data_set = False
-                for curr_data in grain_data:
-
-                    # case has Pre && has Post:
-                    # CREATE / UPDATE
-                    #
-                    # case has Pre == nil && not has Post:
-                    # DELETE
-                    #
-                    # case not has Pre && has Post:
-                    # CREATE
-                    #
-                    # case not haas Pre != nil && not has Post:
-                    # NOP
-
-                    if "pre" not in curr_data or "post" not in curr_data:
-                        continue
-
-                    if sender_id == curr_data['path']:
-                        found_data_set = True
-                        break
-
-                if found_data_set:
-                    if found_initial_data_set:
-                        break
-                    found_initial_data_set = True
-
-            # Now check for the SDP transport file every 500 ms for 10 seconds
-            iterations = 10000/100
-
-            while iterations != 0:
-                url = "single/senders/{}/transportfile".format(sender_id)
-                valid, response = self.is05_utils.checkCleanRequest("GET", url)
-                if valid:
-                    print(response.content)
-                sleep(0.1)
-                iterations -= 1
-        except Exception as e:
-            return test.FAIL("Error during test 01: {}".format(e))
-
-        return test.PASS()
-
     def test_02(self, test):
         """
         Test that the SDP transport file matches with the video Sender, Flow and Source of the Node
@@ -416,7 +394,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], href, e))
@@ -511,7 +492,7 @@ class IpmxSdpTest(GenericTest):
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
                                 return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
                                                  .format(sender["id"],
-                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_ref_clock_source,
                                                          clock))
 
                 if not clock_found:
@@ -595,12 +576,27 @@ class IpmxSdpTest(GenericTest):
                         check_sdp_rfc7798(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 7798 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_10(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_22(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
                 elif flow["media_type"] == "video/H264":
                     try:
                         check_sdp_rfc6184(sdp.primary_media)
                     except SdpCheckError as e:
                         return test.FAIL("Sender {} failed RFC 6184 check: {}".format(sender["id"], e.message))
-
+                    try:
+                        check_sdp_st2110_10(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-10 check: {}".format(sender["id"], e.message))
+                    try:
+                        check_sdp_st2110_22(sdp.primary_media)
+                    except SdpCheckError as e:
+                        return test.FAIL("Sender {} failed ST 2110-22 check: {}".format(sender["id"], e.message))
                 else:
                     return test.FAIL("Sender {} Flow {} has an unexpected media type {}"
                                      .format(sender["id"], flow["id"], flow["media_type"]))
@@ -706,7 +702,10 @@ class IpmxSdpTest(GenericTest):
                 sdp = MatroxSdp()
 
                 try:
-                    sdp.decode(manifest_href_response.text)
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
                 except Exception as e:
                     return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
                                      .format(sender["id"], href, e))
@@ -827,7 +826,7 @@ class IpmxSdpTest(GenericTest):
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
                                 return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
                                                  .format(sender["id"],
-                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_ref_clock_source,
                                                          clock))
 
                 if not clock_found:
@@ -911,8 +910,6 @@ class IpmxSdpTest(GenericTest):
 
         self.test = test
 
-        REGISTRY_TIMEOUT = 10  # seconds
-
         valid, result = self.get_is04_resources("self")
         if not valid:
             return test.FAIL(result)
@@ -924,66 +921,25 @@ class IpmxSdpTest(GenericTest):
         device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
         node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
 
-        node = next(iter(node_map.values()))
         node_id = next(iter(node_map.keys()))
-
+        node = self._get_node_from_registry(node_id)
+        if node is None:
+            return test.FAIL("Node {} Could not find the Node in the registry"
+                                .format(node_id))        
         try:
 
-            # Register to get resource updated for devices
-            sub_json = self.prepare_subscription("/devices")
-            resp_json = self.post_subscription(test, sub_json)
-            websocket = WebsocketWorker(resp_json["ws_href"])
+            found_devices = list()
 
-            websocket.start()
+            for device_id in device_map.keys():
+                device = self._get_device_from_registry(device_id)
+                if device is not None:
+                    found_devices.append(device_id)
 
-            sleep(CONFIG.WS_MESSAGE_TIMEOUT)
-
-            found_devices_time_start = time.monotonic()
-
-            while True:
-
-                sleep(0.5)
-
-                if time.monotonic() - found_devices_time_start > REGISTRY_TIMEOUT:
-                    return test.FAIL("Node {} Could not find the Node's devices {} in the registry prior to a timeout"
-                                     " of {} seconds".format(node_id, list(device_map.keys()), REGISTRY_TIMEOUT))
-
-                if websocket.did_error_occur():
-                    return test.FAIL("Node {} Error opening websocket: {}".format(node_id,
-                                                                                  websocket.get_error_message()))
-
-                received_messages = websocket.get_messages()
-
-                # Verify data inside messages
-                grain_data = list()
-
-                for curr_msg in received_messages:
-                    json_msg = json.loads(curr_msg)
-                    grain_data.extend(json_msg["grain"]["data"])
-
-                found_devices = list()
-
-                for curr_data in grain_data:
-
-                    # case has Pre && has Post:
-                    # => CREATE / UPDATE
-                    # case has Pre == nil && not has Post:
-                    # => DELETE
-                    # case not has Pre && has Post:
-                    # => CREATE
-                    # case not haas Pre != nil && not has Post:
-                    # => NOP
-                    if "pre" not in curr_data or "post" not in curr_data:
-                        continue
-
-                    if curr_data['path'] in device_map.keys():
-                        found_devices.append(curr_data['path'])
-                        break
-
-                if all(key in found_devices for key in device_map.keys()):
-                    break
-
-            # Now for each device check the NOs API implemented and their version
+            if not all(key in found_devices for key in device_map.keys()):
+                return test.FAIL("Node {} Could not find the Node's devices {} in the registry"
+                                    .format(node_id, list(device_map.keys())))
+            
+            # Now for each device check the NMOS API implemented and their version
             found_is04 = False
             found_is05 = False
             found_is11 = False
@@ -1043,9 +999,9 @@ class IpmxSdpTest(GenericTest):
 
             for sender in all_senders:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Sender {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp") and not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not RTP and not USB"
                                      .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
@@ -1111,6 +1067,19 @@ class IpmxSdpTest(GenericTest):
                 if not compatible:
                     return test.FAIL(error_msg)
 
+                # Derive the media type from the SDP caps (symmetric with the Receiver test).
+                # The SDP conversion stores it as a single-valued media_type capability in the primary capset.
+                sdp_media_type_values = sdp_caps.capsets[0][CapFormatMediaType].value.values
+                if not sdp_media_type_values:
+                    return test.FAIL("Sender {} SDP capabilities do not specify a media type"
+                                     .format(sender["id"]))
+                sdp_media_type = sdp_media_type_values[0]
+
+                # Verify that the sender capabilities expose the required per media_type capabilities
+                compatible, error_msg = self._verify_sender_ccf_required_capabilities(sender, sdp_caps, sdp_media_type)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
             if len(sender_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Senders found on the Node => "
                                     "PLEASE ACTIVATE A SENDER to TEST")
@@ -1147,9 +1116,9 @@ class IpmxSdpTest(GenericTest):
 
             for receiver in all_receivers:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Receiver {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp") and not receiver["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Receiver {} transport {} is not RTP and not USB"
                                      .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
@@ -1206,6 +1175,20 @@ class IpmxSdpTest(GenericTest):
                 if not compatible:
                     return test.FAIL(error_msg)
 
+                # A Receiver has no Flow, so derive the media type from the SDP caps.
+                # The SDP conversion stores it as a single-valued media_type capability in the primary capset.
+                sdp_media_type_values = sdp_caps.capsets[0][CapFormatMediaType].value.values
+                if not sdp_media_type_values:
+                    return test.FAIL("Receiver {} SDP capabilities do not specify a media type"
+                                     .format(receiver["id"]))
+                sdp_media_type = sdp_media_type_values[0]
+
+                # Verify that the receiver capabilities expose the required per media_type capabilities
+                compatible, error_msg = self._verify_receiver_ccf_required_capabilities(receiver, sdp_caps, sdp_media_type)
+                if not compatible:
+                    return test.FAIL(error_msg)
+
+
             if len(receiver_tested) == 0:
                 return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
                                     "PLEASE ACTIVATE A RECEIVER to TEST")
@@ -1241,9 +1224,9 @@ class IpmxSdpTest(GenericTest):
                 device = device_map[sender["device_id"]]
                 node = node_map[device["node_id"]]
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Sender {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp") and not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not RTP and not USB"
                                      .format(sender["id"], sender["transport"]))
 
                 url = "single/senders/{}/active".format(sender["id"])
@@ -1325,9 +1308,9 @@ class IpmxSdpTest(GenericTest):
 
             for receiver in all_receivers:
 
-                # Check the transport => only RTP is currently supported by IPMX
-                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
-                    return test.FAIL("Receiver {} transport {} is not RTP"
+                # Check the transport => only RTP and USB are currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp") and not receiver["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Receiver {} transport {} is not RTP and not USB"
                                      .format(receiver["id"], receiver["transport"]))
 
                 url = "single/receivers/{}/active".format(receiver["id"])
@@ -1421,6 +1404,1337 @@ class IpmxSdpTest(GenericTest):
 
         except Exception as e:
             return test.FAIL("Error during test 08: {}".format(e))
+
+    def test_100(self, test):
+        """
+        Pre-Test to get a PCAP capture of a video sender along with its SDP transport file. The selection
+        between the LOCAL or VB440 mode is based on an IPMX_VENDOR_PCAP_CAPTURE environment variable.
+        """
+        self.test = test
+        
+        pcap_capture_vendor = os.environ.get('IPMX_VENDOR_PCAP_CAPTURE')
+
+        if os.environ.get('IPMX_VENDOR_PCAP_CAPTURE') == 'LOCAL':
+            return self.test_101(test)
+        elif os.environ.get('IPMX_VENDOR_PCAP_CAPTURE') == 'VB440':
+            return self.test_102(test)
+        else:
+            return test.FAIL("Invalid IPMX_VENDOR_PCAP_CAPTURE environment variable: {}".format(pcap_capture_vendor))
+
+    def test_101(self, test):
+        """
+        Pre-Test to get a << LOCAL >> PCAP capture of a video sender along with its SDP transport file.
+        """
+
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+
+        video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                         and sender["flow_id"] in flow_map
+                         and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"]
+
+        audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                         and sender["flow_id"] in flow_map
+                         and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"]
+
+        senders = video_senders + audio_senders
+
+        for sender in senders:
+            # Initialize cleanup variables
+            multicast_socket = None
+            interface_name = None
+            tcpdump_process = None
+            multicast_ip = None
+
+            if sender in video_senders:
+                format = "video"
+            elif sender in audio_senders:
+                format = "audio"
+            else:
+                return test.FAIL("UNEXPECTED sender {}".format(sender["id"]))
+
+            # check the transport => only RTP is currently supported by IPMX
+            if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                return test.FAIL("Sender {} transport {} is not RTP"
+                                 .format(sender["id"], sender["transport"]))
+
+            try:
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                active = response.json()
+
+                # We require an active sender in order to get an SDP transport file
+                url = "single/senders/{}/staged".format(sender["id"])
+                if not active["master_enable"]:
+                    # activate the sender first
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": True,
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        return test.FAIL("Sender {} cannot activate the sender"
+                                         .format(sender["id"]))
+
+                    # update the active parameters after activation
+                    url = "single/senders/{}/active".format(sender["id"])
+                    valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                    if not valid:
+                        return test.FAIL("Sender {} not responding to IS-05 request"
+                                         .format(sender["id"]))
+
+                    active = response.json()
+
+                sdp_retry = 3
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                # Create an SDP object and parse the text into it. There must be at least a primary media
+                # (no redundancy)
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                # Allow IPMX and ST-2110
+
+                # Check the multicast address of the transport parameters matches with the SDP
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
+
+                # deactivate the sender as we want to start streaming only once the PCAP capture is enabled
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": False,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
+
+                # Join the multicast stream and keep it joined
+                # Extract multicast parameters
+                multicast_ip = primary_transport_params["destination_ip"]
+                source_ip = primary_transport_params["source_ip"]
+                port = primary_transport_params["destination_port"]
+
+                # Validate multicast parameters
+                if not MulticastUtils.is_multicast_address(multicast_ip):
+                    return test.FAIL("Sender {} destination IP {} is not a valid multicast address"
+                                     .format(sender["id"], multicast_ip))
+
+                # Join the multicast group and keep it joined for the duration of the test
+                print("Joining multicast group for sender {}: {}:{} from source {}"
+                      .format(sender["id"], multicast_ip, port, source_ip))
+
+                try:
+                    multicast_socket, interface_name = MulticastUtils.join_multicast_group_simple(
+                        multicast_ip, port
+                    )
+                    print("Successfully joined multicast group {} (ASM mode)"
+                            .format(multicast_ip))
+                except MulticastJoinError as e:
+                    return test.FAIL("Sender {} failed to join multicast stream, error: {}"
+                                        .format(sender["id"], e))
+
+                # Start tcpdump to capture the multicast stream for 3 seconds in parallel with this test
+                pcap_filename = format + "-{}.pcap".format(sender["id"])
+                sdp_filename = format + "-{}.sdp".format(sender["id"])
+                caps_filename = format + "-{}.sender.caps.json".format(sender["id"])
+
+                # Get the directory of this script for capture scripts, and use vendor-specific directory for output files
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory (for scripts)
+
+                # Use IPMX_VENDOR environment variable to determine output directory, fallback to parent_dir if not set
+                ipmx_vendor = os.environ.get('IPMX_VENDOR')
+                if ipmx_vendor and ipmx_vendor != "":
+                    output_dir = f'IPMX_VENDOR_{ipmx_vendor}'
+                    # Ensure output directory exists
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                else:
+                    output_dir = parent_dir  # Fallback to original behavior
+
+                # Remove the files from output directory
+                try:
+                    os.remove(os.path.join(output_dir, pcap_filename))
+                    os.remove(os.path.join(output_dir, sdp_filename))
+                    os.remove(os.path.join(output_dir, caps_filename))
+                except Exception:
+                    pass  # ignore if file not found
+
+                # Give time for some implementations to bring down the previous stream before
+                # the new packet capture on the local host is triggered.
+                time.sleep(1) 
+
+                try:
+                    if platform.system() == "Windows":
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        print(f"Windows Interfaces {MulticastUtils.get_windows_adapters()}")
+                        npf = MulticastUtils.get_windows_interface_NPF(interface_name)
+                        print(f"Windows NPF is '{npf}' from {interface_name}")
+                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path, multicast_ip, str(port), format, npf])
+                    else:
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.sh")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        # Run through bash explicitly to avoid exec format errors
+                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path, multicast_ip, str(port), format])
+
+                    print("Started packet capture: {}".format(pcap_filename))
+
+                except (FileNotFoundError, OSError) as e:
+                    return test.FAIL("Failed to start packet capture, error: {}".format(e))
+
+                time.sleep(3)
+
+                # Now reactivate the sender for the PCAP capture
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": True,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot activate the sender".format(sender["id"]))
+
+                # Wait packet capture if it was started
+                try:
+                    tcpdump_process.wait(timeout=30)  # wait for the process to terminate with timeout
+                    print("Stopped packet capture: {}".format(pcap_filename))
+                except subprocess.TimeoutExpired:
+                    print("Warning: Packet capture process did not terminate within timeout, terminating...")
+                    tcpdump_process.terminate()
+                    try:
+                        tcpdump_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        print("Warning: Force killing packet capture process...")
+                        tcpdump_process.kill()
+                        tcpdump_process.wait()
+                except Exception as e:
+                    print("Warning: Error waiting for packet capture: {}".format(e))
+                    # Try to terminate if still running
+                    try:
+                        if tcpdump_process.poll() is None:
+                            tcpdump_process.terminate()
+                            tcpdump_process.wait(timeout=5)
+                    except Exception:
+                        try:
+                            tcpdump_process.kill()
+                        except Exception:
+                            pass
+
+                # We must get the SDP transport file again to get the final PEP parameters that
+                # become final on activation with master_enable set to true. We are not expecting
+                # any changes in the SDP transport file after activation with master_enable set to true.
+                sdp_retry = 2
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    print(manifest_href_response.text)
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                with open(os.path.join(output_dir, sdp_filename), 'wb') as file:
+                    file.write(manifest_href_response.content)
+
+                with open(os.path.join(output_dir, caps_filename), 'w') as caps_file:
+                    json.dump(sender.get("caps", {}), caps_file, indent=2)
+                time.sleep(1)
+
+                # Sender kept intentionally active
+
+            except KeyError as e:
+                return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
+            finally:
+                # Cleanup: ensure all resources are properly released
+                cleanup_errors = []
+                
+                # 1. Clean up multicast connection
+                if multicast_socket is not None and multicast_ip is not None:
+                    try:
+                        MulticastUtils.leave_multicast_group(multicast_socket, multicast_ip, interface_name)
+                        multicast_socket.close()
+                        print("Left multicast group {} for sender {}"
+                              .format(multicast_ip, sender["id"]))
+                    except Exception as e:
+                        cleanup_errors.append("Error leaving multicast group: {}".format(str(e)))
+                
+                # 2. Terminate packet capture process if still running
+                if tcpdump_process is not None:
+                    try:
+                        if tcpdump_process.poll() is None:  # Process still running
+                            print("Terminating packet capture process...")
+                            tcpdump_process.terminate()
+                            try:
+                                tcpdump_process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                print("Force killing packet capture process...")
+                                tcpdump_process.kill()
+                                tcpdump_process.wait()
+                    except Exception as e:
+                        cleanup_errors.append("Error terminating packet capture: {}".format(str(e)))
+                
+                if cleanup_errors:
+                    print("Warning: Cleanup errors occurred for sender {}:".format(sender["id"]))
+                    for error in cleanup_errors:
+                        print("  - {}".format(error))
+
+            time.sleep(3)
+
+        if len(senders) > 0:
+            return test.PASS()
+
+        return test.UNCLEAR("No Sender resources were found on the Node")
+
+    def test_102(self, test):
+        """
+        Pre-Test to get a << VB440 >> PCAP capture of a video sender along with its SDP transport file.
+        """
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+
+        video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                            and sender["flow_id"] in flow_map
+                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"]
+
+        audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                            and sender["flow_id"] in flow_map
+                            and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"]
+
+        senders = video_senders + audio_senders
+
+        for sender in senders:
+            # Initialize cleanup variables
+            tcpdump_process = None
+            multicast_ip = None
+
+            if sender in video_senders:
+                format = "video"
+            elif sender in audio_senders:
+                format = "audio"
+            else:
+                return test.FAIL("UNEXPECTED sender {}".format(sender["id"]))
+
+            # check the transport => only RTP is currently supported by IPMX
+            if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                return test.FAIL("Sender {} transport {} is not RTP"
+                                    .format(sender["id"], sender["transport"]))
+            try:
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                active = response.json()
+
+                # We require an active sender in order to get an SDP transport file
+                url = "single/senders/{}/staged".format(sender["id"])
+                if not active["master_enable"]:
+                    # activate the sender first
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": True,
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        return test.FAIL("Sender {} cannot activate the sender"
+                                         .format(sender["id"]))
+
+                    # update the active parameters after activation
+                    url = "single/senders/{}/active".format(sender["id"])
+                    valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                    if not valid:
+                        return test.FAIL("Sender {} not responding to IS-05 request"
+                                         .format(sender["id"]))
+
+                    active = response.json()
+
+                sdp_retry = 3
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                # Create an SDP object and parse the text into it. There must be at least a primary media
+                # (no redundancy)
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                # Allow IPMX and ST-2110
+
+                # Check the multicast address of the transport parameters matches with the SDP
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
+
+                # deactivate the sender as we want to start streaming only once the PCAP capture is enabled
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": False,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
+
+                # Extract multicast parameters
+                multicast_ip = primary_transport_params["destination_ip"]
+                source_ip = primary_transport_params["source_ip"]
+                port = primary_transport_params["destination_port"]
+
+                # Validate multicast parameters
+                if not MulticastUtils.is_multicast_address(multicast_ip):
+                    return test.FAIL("Sender {} destination IP {} is not a valid multicast address"
+                                        .format(sender["id"], multicast_ip))
+
+                # Start tcpdump to capture the multicast stream for 3 seconds in parallel with this test
+                pcap_filename = format + "-{}.pcap".format(sender["id"])
+                sdp_filename = format + "-{}.sdp".format(sender["id"])
+                caps_filename = format + "-{}.sender.caps.json".format(sender["id"])
+
+                # Get the directory of this script for capture scripts, and use vendor-specific directory for output files
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory (for scripts)
+
+                # Use IPMX_VENDOR environment variable to determine output directory, fallback to parent_dir if not set
+                ipmx_vendor = os.environ.get('IPMX_VENDOR')
+                if ipmx_vendor and ipmx_vendor != "":
+                    output_dir = f'IPMX_VENDOR_{ipmx_vendor}'
+                    # Ensure output directory exists
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                else:
+                    output_dir = parent_dir  # Fallback to original behavior
+
+                # Remove the files from output directory
+                try:
+                    os.remove(os.path.join(output_dir, pcap_filename))
+                    os.remove(os.path.join(output_dir, sdp_filename))
+                    os.remove(os.path.join(output_dir, caps_filename))
+                except Exception:
+                    pass  # ignore if file not found
+
+                # Give time for some implementations to bring down the previous stream before
+                # the new packet capture on the VB440 is triggered.
+                time.sleep(1) 
+
+                try:
+                    if platform.system() == "Windows":
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.bat")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        tcpdump_process = subprocess.Popen([capture_script, pcap_full_path, multicast_ip, str(port), format])
+                    else:
+                        capture_script = os.path.join(parent_dir, "start_capture_pcap.sh")
+                        pcap_full_path = os.path.join(output_dir, pcap_filename)
+                        # Run through bash explicitly to avoid exec format errors
+                        tcpdump_process = subprocess.Popen(["bash", capture_script, pcap_full_path, multicast_ip, str(port), format])
+
+                    print("Started packet capture: {}".format(pcap_filename))
+
+                except (FileNotFoundError, OSError) as e:
+                    return test.FAIL("Failed to start packet capture, error: {}".format(e))
+
+                time.sleep(3)
+
+                # Now reactivate the sender for the PCAP capture
+                url = "single/senders/{}/staged".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": True,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Sender {} cannot activate the sender".format(sender["id"]))
+
+                # Wait packet capture if it was started
+                try:
+                    tcpdump_process.wait(timeout=30)  # wait for the process to terminate with timeout
+                    print("Stopped packet capture: {}".format(pcap_filename))
+                except subprocess.TimeoutExpired:
+                    print("Warning: Packet capture process did not terminate within timeout, terminating...")
+                    tcpdump_process.terminate()
+                    try:
+                        tcpdump_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        print("Warning: Force killing packet capture process...")
+                        tcpdump_process.kill()
+                        tcpdump_process.wait()
+                except Exception as e:
+                    print("Warning: Error waiting for packet capture: {}".format(e))
+                    # Try to terminate if still running
+                    try:
+                        if tcpdump_process.poll() is None:
+                            tcpdump_process.terminate()
+                            tcpdump_process.wait(timeout=5)
+                    except Exception:
+                        try:
+                            tcpdump_process.kill()
+                        except Exception:
+                            pass
+
+                # We must get the SDP transport file again to get the final PEP parameters that
+                # become final on activation with master_enable set to true. We are not expecting
+                # any changes in the SDP transport file after activation with master_enable set to true.
+                sdp_retry = 2
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    print(manifest_href_response.text)
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                with open(os.path.join(output_dir, sdp_filename), 'wb') as file:
+                    file.write(manifest_href_response.content)
+
+                with open(os.path.join(output_dir, caps_filename), 'w') as caps_file:
+                    json.dump(sender.get("caps", {}), caps_file, indent=2)
+                time.sleep(1)
+
+                # Sender kept intentionally active
+
+            except KeyError as e:
+                return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
+            finally:
+                # Cleanup: ensure all resources are properly released
+                cleanup_errors = []
+                
+                # 1. Terminate packet capture process if still running
+                if tcpdump_process is not None:
+                    try:
+                        if tcpdump_process.poll() is None:  # Process still running
+                            print("Terminating packet capture process...")
+                            tcpdump_process.terminate()
+                            try:
+                                tcpdump_process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                print("Force killing packet capture process...")
+                                tcpdump_process.kill()
+                                tcpdump_process.wait()
+                    except Exception as e:
+                        cleanup_errors.append("Error terminating packet capture: {}".format(str(e)))
+                
+                if cleanup_errors:
+                    print("Warning: Cleanup errors occurred for sender {}:".format(sender["id"]))
+                    for error in cleanup_errors:
+                        print("  - {}".format(error))
+
+            time.sleep(3)
+
+        if len(senders) > 0:
+            return test.PASS()
+
+        return test.UNCLEAR("No Sender resources were found on the Node")
+
+    def test_103(self, test):
+        """
+        Dump the Receiver caps to a file.
+        """
+        self.test = test
+
+        for resource_type in ["receivers", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        # Also get IS-05 receiver resources
+        valid, result = self.get_is05_partial_resources("receivers")
+        if not valid:
+            return test.FAIL(result)
+
+        try:
+            video_receivers = [receiver for receiver in self.is04_resources["receivers"].values()
+                               if receiver["format"] == FormatVideo]
+            audio_receivers = [receiver for receiver in self.is04_resources["receivers"].values()
+                               if receiver["format"] == FormatAudio]
+
+            receivers = video_receivers + audio_receivers
+
+            receiver_tested = list()
+
+            for receiver in receivers:
+
+                if receiver in video_receivers:
+                    format = "video"
+                elif receiver in audio_receivers:
+                    format = "audio"
+                else:
+                    return test.FAIL("UNEXPECTED receiver {}".format(receiver["id"]))
+
+                # check the transport => only RTP and USB are currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp") and not receiver["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Receiver {} transport {} is not RTP and not USB"
+                                     .format(receiver["id"], receiver["transport"]))
+
+                url = "single/receivers/{}/active".format(receiver["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Receiver {} not responding to IS-05 request"
+                                     .format(receiver["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                receiver_tested.append(receiver["id"])
+
+                # Get receiver CCF capabilities from IS-04 and convert to CCF Caps
+                receiver_ccf_caps = self._get_receiver_ccf_capabilities(receiver)
+
+                if not receiver_ccf_caps:
+                    # If receiver has no capability constraints it fails
+                    return test.FAIL("Receiver {} has no capability constraints"
+                                     .format(receiver["id"]))
+
+                caps_filename = format + "-{}.receiver.caps.json".format(receiver["id"])
+
+                # Get the directory of this script, and use vendor-specific directory for output files
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                parent_dir = os.path.dirname(os.path.dirname(script_dir))  # parent of parent directory
+
+                # Use IPMX_VENDOR environment variable to determine output directory, fallback to parent_dir if not set
+                ipmx_vendor = os.environ.get('IPMX_VENDOR')
+                if ipmx_vendor and ipmx_vendor != "":
+                    output_dir = f'IPMX_VENDOR_{ipmx_vendor}'
+                    # Ensure output directory exists
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                else:
+                    output_dir = parent_dir  # Fallback to original behavior
+
+                # Remove the file from output directory
+                try:
+                    os.remove(os.path.join(output_dir, caps_filename))
+                except Exception:
+                    pass  # ignore if file not found
+
+                with open(os.path.join(output_dir, caps_filename), 'w') as caps_file:
+                    json.dump(receiver.get("caps", {}), caps_file, indent=2)
+
+
+            if len(receiver_tested) == 0:
+                return test.UNCLEAR("No ACTIVE video, audio, or data Receivers found on the Node => "
+                                    "PLEASE ACTIVATE A RECEIVER to TEST")
+
+            return test.PASS()
+
+        except Exception as e:
+            return test.FAIL("Error during test 06: {}".format(e))
+
+    def test_11(self, test):
+        """
+        IPMX Sender Default Multicast Configuration Test and Multicast Exclusion Range Configurability Test
+        """
+
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+
+        try:
+            video_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                             and sender["flow_id"] in flow_map
+                             and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:video"]
+
+            audio_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                             and sender["flow_id"] in flow_map
+                             and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:audio"]
+
+            senders = video_senders + audio_senders
+
+            for sender in senders:
+
+                # check the transport => only RTP is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Sender {} transport {} is not RTP"
+                                     .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                active = response.json()
+
+                # We require an active sender in order to get an SDP transport file
+                if not active["master_enable"]:
+                    return test.FAIL("Sender {} is not active. This test requires an active sender "
+                                     "with a default multicast address".format(sender["id"]))
+
+                sdp_retry = 5
+                while True:
+                    manifest_href = "single/senders/{}/transportfile".format(sender["id"])
+                    manifest_href_valid, manifest_href_response = self.is05_utils.checkCleanRequest(
+                        "GET", manifest_href)
+                    if manifest_href_valid and manifest_href_response.status_code == 200:
+                        pass
+                    elif manifest_href_valid and manifest_href_response.status_code == 404:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                         .format(sender["id"], manifest_href))
+                    else:
+                        return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                         .format(sender["id"], manifest_href, manifest_href_response))
+
+                    if (manifest_href_response.text is None or
+                            manifest_href_response.text == "" or
+                            manifest_href_response.text.isspace()):
+                        sdp_retry -= 1
+                        if sdp_retry <= 0:
+                            return test.FAIL("Sender {} cannot GET an SDP transport file after 5 retries."
+                                             .format(sender["id"]))
+                        else:
+                            time.sleep(2)
+                    else:
+                        break
+
+                # Create an SDP object and parse the text into it. There must be at least a primary media
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], manifest_href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], manifest_href, e))
+
+                # Check IPMX
+                if not sdp.primary_media.ipmx:
+                    return test.FAIL("Sender {} SDP is not indicating IPMX"
+                                     .format(sender["id"]))
+
+                # Check that the device is not using redundancy (simplication for this test)
+                extra_legs = len(active["transport_params"]) - 1
+                if extra_legs > 0:
+                    print("WARNING: Sender {} is configured with redundancy, using leg 0 only for this test".format(sender["id"]))
+
+                # Check the multicast address of the transport parameters
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["destination_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["destination_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} destination address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["destination_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                # IPMX Senders shall include source address information in the SDP object.
+                if sdp.primary_media.source_filter_src_address == "":
+                    return test.FAIL("Sender {} missing source address information in the SDP object"
+                                     .format(sender["id"]))
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.source_filter_src_address or
+                        primary_transport_params["destination_ip"] != sdp.primary_media.source_filter_dst_address):
+                    return test.FAIL("Sender {} source filter destination address {} and source address {} not"
+                                     " matching with sdp destination {} and source {}"
+                                     .format(sender["id"], primary_transport_params["destination_ip"],
+                                             primary_transport_params["source_ip"],
+                                             sdp.primary_media.source_filter_dst_address,
+                                             sdp.primary_media.source_filter_src_address))
+
+                # Extract multicast parameters
+                multicast_ip = primary_transport_params["destination_ip"]
+                source_ip = primary_transport_params["source_ip"]
+                port = primary_transport_params["destination_port"]
+
+                # Validate multicast parameters
+                if not MulticastUtils.is_multicast_address(multicast_ip):
+                    return test.FAIL("Sender {} destination IP {} is not a valid multicast address"
+                                     .format(sender["id"], multicast_ip))
+
+                # IPMX Senders shall use a default UDP port value of 5004
+                if port != 5004:
+                    return test.FAIL("Sender {} destination port {} is not 5004"
+                                     .format(sender["id"], port))
+
+                # The default multicast address for a given IPMX media stream shall be
+                # 239.S.C.D where S is the stream number larger than 0 and less than 128.
+                if not MulticastUtils.is_valid_admin_scope_multicast(multicast_ip):
+                    return test.FAIL("Sender {} destination IP {} is not a valid 239.S.C.D multicast address"
+                                     .format(sender["id"], multicast_ip))
+
+                # check next byte to be in the range 1 to 127
+                if int(multicast_ip.split(".")[1]) < 1 or int(multicast_ip.split(".")[1]) > 127:
+                    return test.FAIL("Sender {} destination IP {} is not a valid 239.S.C.D multicast address"
+                                     .format(sender["id"], multicast_ip))
+
+                # check the last two bytes to match the source address two equivalent bytes
+                if (int(multicast_ip.split(".")[2]) != int(source_ip.split(".")[2]) or
+                        int(multicast_ip.split(".")[3]) != int(source_ip.split(".")[3])):
+                    return test.FAIL("Sender {} destination IP {} and source IP {} do not match on "
+                                     "C and/or D bytes of 239.S.C.D encoding"
+                                     .format(sender["id"], multicast_ip, source_ip))
+
+                # deactivate the sender and test multicast ranges, ensuring cleanup in finally block
+                url = "single/senders/{}/staged".format(sender["id"])
+
+                try:
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": False,
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        return test.FAIL("Sender {} cannot deactivate the sender".format(sender["id"]))
+
+                    # Now we test the multicast range supported keeping the master_enable to false but setting
+                    # various multicast addresses at the base, end and random middle point of the various ranges
+                    # to test.
+                    ip_to_test_with_success = [
+                        "239.1.0.0",
+                        "239.127.255.255",
+                        MulticastUtils.getRandomIpv4AddressWithinRange("239.1.0.0", "239.127.255.255")]
+
+                    for ip in ip_to_test_with_success:
+                        valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                            "master_enable": False,
+                            "transport_params": [{"destination_ip": ip}] + [{}] * extra_legs,
+                            "activation": {"mode": "activate_immediate"}
+                        })
+                        if not valid:
+                            return test.FAIL("Sender {} failed to set a valid multicast address {}"
+                                             .format(sender["id"], ip))
+
+                    ip_to_test_with_failure = [
+                        "224.0.0.0",
+                        "224.0.1.255",
+                        MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
+
+                    for ip in ip_to_test_with_failure:
+                        valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                            "master_enable": False,
+                            "transport_params": [{"destination_ip": ip}] + [{}] * extra_legs,
+                            "activation": {"mode": "activate_immediate"}
+                        })
+                        if valid:
+                            return test.FAIL("Sender {} accepted an invalid multicast address {}".format(sender["id"], ip))
+                finally:
+                    # Always try to re-activate the sender with its original multicast address (best effort)
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": True,
+                        "transport_params": [{"destination_ip": multicast_ip}] + [{}] * extra_legs,
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        print("WARNING: Sender {} could not be re-activated with its original multicast address".format(sender["id"]))
+
+            if len(senders) > 0:
+                return test.PASS()
+
+        except KeyError as e:
+            return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
+
+        return test.UNCLEAR("No Sender resources were found on the Node")
+
+    def test_12(self, test):
+        """
+        IPMX Receiver multicast Exclusion Range Configurability Test
+        """
+
+        self.test = test
+
+        for resource_type in ["receivers", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        try:
+            video_receivers = [receiver for receiver in self.is04_resources["receivers"].values() if receiver["format"]
+                               and receiver["format"] == "urn:x-nmos:format:video"]
+
+            audio_receivers = [receiver for receiver in self.is04_resources["receivers"].values() if receiver["format"]
+                               and receiver["format"] == "urn:x-nmos:format:audio"]
+
+            receivers = video_receivers + audio_receivers
+
+            for receiver in receivers:
+
+                # check the transport => only RTP is currently supported by IPMX
+                if not receiver["transport"].startswith("urn:x-nmos:transport:rtp"):
+                    return test.FAIL("Receiver {} transport {} is not RTP"
+                                     .format(receiver["id"], receiver["transport"]))
+
+                url = "single/receivers/{}/active".format(receiver["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Receiver {} not responding to IS-05 request"
+                                     .format(receiver["id"]))
+
+                active = response.json()
+
+                # We require an active receiver proving that it can srteazm with the default multicast address
+                url = "single/receivers/{}/staged".format(receiver["id"])
+                if not active["master_enable"]:
+                    return test.FAIL("Receiver {} is not active. This test requires an active receiver with "
+                                     "a default multicast address".format(receiver["id"]))
+
+                # Check that the device is not using redundancy (simplication for this test)
+                extra_legs = len(active["transport_params"]) - 1
+                if extra_legs > 0:
+                    print("WARNING: Receiver {} is configured with redundancy, using leg 0 only for this test".format(receiver["id"]))
+
+                # Check the multicast address of the transport parameters
+                primary_transport_params = active["transport_params"][0]
+
+                # Extract multicast parameters
+                multicast_ip = primary_transport_params["multicast_ip"]
+                source_ip = primary_transport_params["source_ip"]
+                port = primary_transport_params["destination_port"]
+
+                # Validate multicast parameters
+                if not MulticastUtils.is_multicast_address(multicast_ip):
+                    return test.FAIL("Receiver {} destination IP {} is not a valid multicast address"
+                                     .format(receiver["id"], multicast_ip))
+
+                # IPMX Receivers shall use a default UDP port value of 5004
+                if port != 5004:
+                    return test.FAIL("Receiver {} destination port {} is not 5004"
+                                     .format(receiver["id"], port))
+
+                # 239.S.C.D where S is the stream number larger than 0 and less than 128.
+                if not MulticastUtils.is_valid_admin_scope_multicast(multicast_ip):
+                    return test.FAIL("Receiver {} destination IP {} is not a valid 239.S.C.D multicast address"
+                                     .format(receiver["id"], multicast_ip))
+
+                # check next byte to be in the range 1 to 127
+                if int(multicast_ip.split(".")[1]) < 1 or int(multicast_ip.split(".")[1]) > 127:
+                    return test.FAIL("Receiver {} destination IP {} is not a valid 239.S.C.D multicast address"
+                                     .format(receiver["id"], multicast_ip))
+
+                # check the last two bytes to match the source address two equivalent bytes
+                if (int(multicast_ip.split(".")[2]) != int(source_ip.split(".")[2]) or
+                        int(multicast_ip.split(".")[3]) != int(source_ip.split(".")[3])):
+                    return test.FAIL("Receiver {} destination IP {} and source IP {} do not match on "
+                                     "C and/or D bytes of 239.S.C.D encoding"
+                                     .format(receiver["id"], multicast_ip, source_ip))
+
+                # deactivate the receiver
+                url = "single/receivers/{}/staged".format(receiver["id"])
+                valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                    "master_enable": False,
+                    "activation": {"mode": "activate_immediate"}
+                })
+                if not valid:
+                    return test.FAIL("Receiver {} cannot deactivate the receiver".format(receiver["id"]))
+
+                # Now we test the multicast range supported keeping the master_enable to false but setting
+                # various multicast addresses at the base, end and random middle point of the various ranges
+                # to test.
+                ip_to_test_with_success = [
+                    "239.0.0.0",
+                    "239.255.255.255",
+                    MulticastUtils.getRandomIpv4AddressWithinRange("239.0.0.0", "239.255.255.255"),
+                    "224.0.2.0",
+                    "238.255.255.255",
+                    MulticastUtils.getRandomIpv4AddressWithinRange("224.0.2.0", "238.255.255.255")]
+
+                for ip in ip_to_test_with_success:
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": False,
+                        "transport_params": [{"multicast_ip": ip}] + ([{"rtp_enabled": False}] * extra_legs),
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if not valid:
+                        return test.FAIL("Receiver {} failed to set a valid multicast address {}"
+                                         .format(receiver["id"], ip))
+
+                ip_to_test_with_failure = [
+                    "224.0.0.0",
+                    "224.0.1.255",
+                    MulticastUtils.getRandomIpv4AddressWithinRange("224.0.0.0", "224.0.1.255")]
+
+                for ip in ip_to_test_with_failure:
+                    valid, response = self.is05_utils.checkCleanRequest("PATCH", url, {
+                        "master_enable": False,
+                        "transport_params": [{"multicast_ip": ip}] + ([{"rtp_enabled": False}] * extra_legs),
+                        "activation": {"mode": "activate_immediate"}
+                    })
+                    if valid:
+                        return test.FAIL("Receiver {} accepted an invalid multicast address {}"
+                                         .format(receiver["id"], ip))
+
+            if len(receivers) > 0:
+                return test.PASS()
+
+        except KeyError as e:
+            return test.FAIL("Expected attribute not found in IS-04/IS-05 resource: {}".format(e))
+
+        return test.UNCLEAR("No Receiver resources were found on the Node")
+
+    def test_13(self, test):
+        """
+        List all the Senders and Receivers on the Node along with their label, description and transport.
+        """
+        self.test = test
+
+        for resource_type in ["senders", "receivers"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        # Display Senders in a formatted table
+        senders = list(self.is04_resources["senders"].values())
+        if senders:
+            print("\n" + "=" * 150)
+            print("SENDERS")
+            print("=" * 150)
+            print("{:<38} {:<37} {:<57} {:<18}".format("GUID", "Label", "Description", "Transport"))
+            print("-" * 150)
+            for sender in senders:
+                label = sender.get("label", "")[:36]
+                description = sender.get("description", "")[:56]
+                transport = sender.get("transport", "").replace("urn:x-nmos:transport:", "")[:17]
+                print("{:<38} {:<37} {:<57} {:<18}".format(
+                    sender["id"],
+                    label,
+                    description,
+                    transport
+                ))
+            print("=" * 150)
+            print("Total Senders: {}".format(len(senders)))
+        else:
+            print("\nNo Senders found on the Node")
+
+        # Display Receivers in a formatted table
+        receivers = list(self.is04_resources["receivers"].values())
+        if receivers:
+            print("\n" + "=" * 150)
+            print("RECEIVERS")
+            print("=" * 150)
+            print("{:<38} {:<37} {:<57} {:<18}".format("GUID", "Label", "Description", "Transport"))
+            print("-" * 150)
+            for receiver in receivers:
+                label = receiver.get("label", "")[:36]
+                description = receiver.get("description", "")[:56]
+                transport = receiver.get("transport", "").replace("urn:x-nmos:transport:", "")[:17]
+                print("{:<38} {:<37} {:<57} {:<18}".format(
+                    receiver["id"],
+                    label,
+                    description,
+                    transport
+                ))
+            print("=" * 150)
+            print("Total Receivers: {}".format(len(receivers)))
+        else:
+            print("\nNo Receivers found on the Node")
+
+        print()  # Empty line at the end
+        return test.PASS()
+
+    def test_14(self, test):
+        """
+        Test that the SDP transport file matches with the USB Sender, Flow and Source of the Node
+        """
+
+        self.test = test
+
+        for resource_type in ["senders", "flows", "sources", "devices", "self"]:
+            valid, result = self.get_is04_resources(resource_type)
+            if not valid:
+                return test.FAIL(result)
+
+        flow_map = {flow["id"]: flow for flow in self.is04_resources["flows"].values()}
+        source_map = {source["id"]: source for source in self.is04_resources["sources"].values()}
+        device_map = {device["id"]: device for device in self.is04_resources["devices"].values()}
+        node_map = {node["id"]: node for node in self.is04_resources["self"].values()}
+
+        try:
+            usb_senders = [sender for sender in self.is04_resources["senders"].values() if sender["flow_id"]
+                           and sender["flow_id"] in flow_map
+                           and flow_map[sender["flow_id"]]["format"] == "urn:x-nmos:format:data"
+                           and flow_map[sender["flow_id"]]["media_type"] == "application/usb"]
+
+            sender_tested = list()
+
+            for sender in usb_senders:
+
+                flow = flow_map[sender["flow_id"]]
+                source = source_map[flow["source_id"]]
+                device = device_map[sender["device_id"]]
+                node = node_map[device["node_id"]]
+
+                # check the transport => only USB is currently supported by IPMX
+                if not sender["transport"].startswith("urn:x-nmos:transport:usb"):
+                    return test.FAIL("Sender {} transport {} is not USB"
+                                     .format(sender["id"], sender["transport"]))
+
+                url = "single/senders/{}/active".format(sender["id"])
+                valid, response = self.is05_utils.checkCleanRequest("GET", url)
+                if not valid:
+                    return test.FAIL("Sender {} not responding to IS-05 request"
+                                     .format(sender["id"]))
+
+                # The IS-05 active transport parameters provide an array of such along with the master_enable.
+                active = response.json()
+
+                if not active["master_enable"]:
+                    continue
+
+                sender_tested.append(sender["id"])
+
+                # The sender being active it must provide an SDP transport file and be accessible
+                if "manifest_href" not in sender:
+                    return test.FAIL("Sender {} MUST provide the 'manifest_href' attribute."
+                                     .format(sender["id"]))
+
+                href = sender["manifest_href"]
+                if not href:
+                    return test.FAIL("Sender {} MUST provide a valid 'manifest_href' attribute."
+                                     .format(sender["id"]))
+
+                manifest_href_valid, manifest_href_response = self.do_request("GET", href)
+                if manifest_href_valid and manifest_href_response.status_code == 200:
+                    pass
+                elif manifest_href_valid and manifest_href_response.status_code == 404:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status 404."
+                                     .format(sender["id"], href))
+                else:
+                    return test.FAIL("Sender {} cannot GET an SDP transport file {}, got status {}."
+                                     .format(sender["id"], href, manifest_href_response))
+
+                # Create an SDP object and parse the text into it. There must be at least a primary
+                # media (no redundancy)
+                sdp = MatroxSdp()
+
+                try:
+                    decode_error = sdp.decode(manifest_href_response.text)
+                    if decode_error:
+                        return test.FAIL("Sender {} cannot decode the SDP transport file {}, decode error: {}"
+                                         .format(sender["id"], href, decode_error))
+                except Exception as e:
+                    return test.FAIL("Sender {} cannot decode the SDP transport file {}, raised an exception {}"
+                                     .format(sender["id"], href, e))
+
+                # Make sure the clock matches with the Source and Node
+                clock_name = source["clock_name"]
+                clock_found = False
+
+                for clock in node["clocks"]:
+                    if clock["name"] == clock_name:
+                        clock_found = True
+                        if clock["ref_type"] == "ptp":
+                            if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
+                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                    sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                                 " do not match Node clock {}"
+                                                 .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
+                                                         sdp.primary_media.ts_delay,
+                                                         sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_version, clock))
+                        else:
+                            if sdp.primary_media.ts_ref_clock_source != "localmac":
+                                return test.FAIL("Sender {} SDP media clock source {} do not match Node clock {}"
+                                                 .format(sender["id"],
+                                                         sdp.primary_media.sdp.primary_media.ts_ref_clock_source,
+                                                         clock))
+
+                if not clock_found:
+                    return test.FAIL("Sender {} Source {} clock name {} not found in Node clocks {}"
+                                     .format(sender["id"], source["id"], clock_name, node["clocks"]))
+
+                # Check the server address of the transport parameters matches with the SDP
+                primary_transport_params = active["transport_params"][0]
+
+                if (primary_transport_params["source_ip"] != sdp.primary_media.connection_address or
+                        primary_transport_params["source_port"] != sdp.primary_media.port):
+                    return test.FAIL("Sender {} source address {} and port {} not matching with sdp address {}"
+                                     " and port {}"
+                                     .format(sender["id"], primary_transport_params["source_ip"],
+                                             primary_transport_params["source_port"],
+                                             sdp.primary_media.connection_address, sdp.primary_media.port))
+
+                # Make sure the number of legs matches with the number of the SDP medias
+                if len(active["transport_params"]) != sdp.media_count:
+                    return test.FAIL("Sender {} legs in transport parameters {} not matching with SDP media count {}"
+                                     .format(sender["id"], len(active["transport_params"]), sdp.media_count))
+
+                # Check the SDP transport file against ST-2110 and RFC requirements
+                try:
+                    check_sdp_ipmx_usb(sdp.primary_media)
+                except SdpCheckError as e:
+                    return test.FAIL("Sender {} failed RFC 3551 check: {}".format(sender["id"], e.message))
+
+            if len(sender_tested) == 0:
+                return test.UNCLEAR("No ACTIVE USB data Sender found on the Node => PLEASE ACTIVATE"
+                                    " A SENDER to TEST")
+
+            if len(usb_senders) > 0:
+                return test.PASS()
+
+        except KeyError as ex:
+            return test.FAIL("Expected attribute not found in IS-04 resource: {}".format(ex))
+
+        return test.UNCLEAR("No USB data Sender resources were found on the Node")
 
     def _get_sender_from_registry(self, sender_id):
         """
@@ -1548,21 +2862,39 @@ class IpmxSdpTest(GenericTest):
 
             # Convert sender JSON caps to CCF Caps object
             try:
-                sender_caps = convert_caps_json_to_caps(sender_ccf_caps)
+                sender_caps = convert_caps_json_to_caps(sender_ccf_caps).get() # sort by preference
             except Exception as e:
                 return False, "Sender {} caps JSON to CCF conversion failed: {}".format(sender["id"], e)
 
             print("SENDER CAPS:\n{}\n".format(str(sender_caps)))
 
             sender_active_constraints = self._get_is11_active_constraints(sender["id"])
-            if sender_active_constraints:
+            if sender_active_constraints and len(sender_active_constraints.get("constraint_sets", [])):
                 try:
                     sender_cons = convert_caps_json_to_caps(sender_active_constraints).to_cons()
                 except Exception as e:
                     return False, "Sender {} active constraints JSON to CCF conversion failed: {}".format(
                         sender["id"], e)
 
-                sender_caps = caps_constrict_by_cons(sender_caps, sender_cons)
+                # We want to constrain each capset by the IS-11 constraints and keep the original preference
+                # which allow keeing caps that are very similar to the original ones but taking into account
+                # the IS-11 constraints. The default algorithms of CCF do not allow this operation so we must
+                # implement it manually.
+                result_sender_caps = Caps(capsets=[])
+                for capset in sender_caps.capsets:
+                    try:
+                        # Active constraints are already within the caps of the Sender so this operator is ok
+                        caps = caps_constrict_by_cons(Caps(capsets=[capset]), sender_cons)
+                        for cs in caps.capsets:
+                            cs.preference = capset.preference  # keep original preference
+                            result_sender_caps.capsets.append(cs)
+                    except Exception as e:
+                        # It is possible to get empty spaces whch is normal when isolating a single capset
+                        pass
+                sender_caps = result_sender_caps.get()  # sort by preference
+
+                if len(sender_caps.capsets) == 0:
+                    return False, "Sender {} constriction failed, possibly an empty space".format(sender["id"])
 
                 print("SENDER CAPS (constrained by IS-11):\n{}\n".format(str(sender_caps)))
 
@@ -1585,6 +2917,186 @@ class IpmxSdpTest(GenericTest):
                         "included in sender CCF constraints".format(sender["id"])
             except Exception as e:
                 return False, "Sender {} CCF capability inclusion check failed: {}".format(sender["id"], e)
+
+        except Exception as e:
+            return False, "Sender {} CCF capability verification error: {}".format(sender["id"], e)
+
+    def _verify_sender_ccf_required_capabilities(self, sender, sdp_flow_caps, flow_media_type):
+        """
+        Verify that SDP capabilities reqruiements specific to a given media type are compatible
+        and precisely expressed by the  sender CCF capabilities.
+
+        Args:
+            sender: Sender resource from IS-04
+            sdp_caps: CCF Caps from SDP conversion
+
+        Returns:
+            tuple: (success, error_message) where success is True if compatible,
+                   False with error message if not compatible or error occurred
+        """
+        try:
+            # Get sender CCF capabilities from IS-04 and convert to CCF Caps
+            sender_ccf_caps = self._get_sender_ccf_capabilities(sender)
+
+            if not sender_ccf_caps:
+                # If sender has no capability constraints defined, assume compatibility
+                return True, ""
+
+            # Convert sender JSON caps to CCF Caps object
+            try:
+                sender_caps = convert_caps_json_to_caps(sender_ccf_caps).get() # sort by preference
+            except Exception as e:
+                return False, "Sender {} caps JSON to CCF conversion failed: {}".format(sender["id"], e)
+
+            print("SENDER CAPS:\n{}\n".format(str(sender_caps)))
+
+            # Get the primary capability set from SDP
+            if len(sdp_flow_caps.capsets) == 0:
+                return False, "Sender {} SDP transport file or Flow  produced no capability sets".format(sender["id"])
+
+            primary_capset = sdp_flow_caps.capsets[0]
+
+            print("SDP Transport File or Flow CAPS:\n{}\n".format(str(primary_capset)))
+
+            or_consets = []
+
+            if flow_media_type == "video/raw":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling)
+                or_consets = [
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoRaw),
+                        make_con(CapFormatComponentDepth, 10),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_422)),
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoRaw),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingRGB)),
+                ]
+            elif flow_media_type == "video/jxsv":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel, CapFormatSublevel)
+
+                # If the current stream profile is a TDC profile, as pre TR-10-15 Part 1 the
+                # Sender is requried to also support the base JPEG XS profile.
+                profile_values = primary_capset[CapFormatProfile].value.values
+
+                if profile_values and profile_values[0] == JxsvProfileTDC444_12:
+                    or_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_422),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12, JxsvProfileTDC444_12)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingRGB),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12, JxsvProfileTDC444_12)),
+                    ]
+                else:
+                    or_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_422),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingRGB),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12)),
+                    ]
+            elif flow_media_type == "video/H265":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel)
+
+                # If the current stream profile is a 444 profile, as pre TR-10-15 Part 2 the
+                # Sender is requried to also support the base HEVC profile.
+                profile_values = primary_capset[CapFormatProfile].value.values
+
+                if profile_values and (profile_values[0] == H265ProfileMain10_444 or profile_values[0] == H265ProfileMain_444):
+                    or_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420, SamplingYCbCr_444),
+                            make_con(CapFormatProfile, CodecProfileMain, H265ProfileMain_444)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420, SamplingYCbCr_444),
+                            make_con(CapFormatProfile, H265ProfileMain10, H265ProfileMain10_444)),
+                    ]
+                else:
+                    or_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                            make_con(CapFormatProfile, CodecProfileMain)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                            make_con(CapFormatProfile, H265ProfileMain10)),
+                    ]
+
+            elif flow_media_type == "video/H264":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel)
+                or_consets = [
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoH264),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                        make_con(CapFormatProfile, CodecProfileMain)),
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoH264),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                        make_con(CapFormatProfile, H264ProfileHigh)),
+                ]
+            elif flow_media_type in ("audio/L16", "audio/L20", "audio/L24"):
+                checkCons = check_conset("Check Audio", primary_capset,
+                    CapFormatMediaType, CapFormatSampleDepth, CapFormatSampleRate,
+                    CapFormatChannelCount, CapTransportPacketTime)
+                # Accept L16/16-bit and L24/24-bit at 48 kHz, for 1, 2 or 8 channels.
+                or_consets = [
+                    alt_conset("Check Audio",
+                        make_con(CapFormatMediaType, media),
+                        make_con(CapFormatSampleDepth, depth),
+                        make_con(CapFormatSampleRate, 48000),
+                        make_con(CapFormatChannelCount, channels),
+                        make_con(CapTransportPacketTime, 1))
+                    for media, depth in ((AudioL16, 16), (AudioL24, 24))
+                    for channels in (1, 2, 8)
+                ]
+            elif flow_media_type == "audio/AM824":
+                checkCons = check_conset("Check Audio", primary_capset,
+                    CapFormatMediaType, CapFormatSampleRate, CapFormatChannelCount,
+                    CapTransportPacketTime)
+                or_consets = [
+                    alt_conset("Check Audio",
+                        make_con(CapFormatMediaType, AudioAM824),
+                        make_con(CapFormatSampleRate, 48000),
+                        make_con(CapFormatChannelCount, 2, 8),
+                        make_con(CapTransportPacketTime, 1))
+                ]
+            else:
+                return False, "Sender {} invalid media type {}".format(sender["id"], flow_media_type)
+
+            if not conset_included_in_caps(checkCons, sender_caps, True):
+                return False, "Sender {} capabilities are not precise. Using INFINITE RANGE or UNSPECIFIED capability".format(sender["id"])
+
+            for or_conset in or_consets:
+                if conset_included_in_caps(or_conset, sender_caps, True):
+                    return True, ""
+
+            return False, "Sender {} capabilities are not precise or not allowing AIMS format alternatives. Using INFINITE RANGE or UNSPECIFIED capability".format(sender["id"])
 
         except Exception as e:
             return False, "Sender {} CCF capability verification error: {}".format(sender["id"], e)
@@ -1640,6 +3152,192 @@ class IpmxSdpTest(GenericTest):
                         "in receiver CCF constraints".format(receiver["id"])
             except Exception as e:
                 return False, "Receiver {} CCF capability inclusion check failed: {}".format(receiver["id"], e)
+
+        except Exception as e:
+            return False, "Receiver {} CCF capability verification error: {}".format(receiver["id"], e)
+
+    def _verify_receiver_ccf_required_capabilities(self, receiver, sdp_flow_caps, flow_media_type):
+        """
+        Verify that SDP capabilities requirements specific to a given media type are compatible
+        and precisely expressed by the receiver CCF capabilities.
+
+        Unlike the Sender (which only needs to support ONE of the AIMS format alternatives), a
+        Receiver must support ALL of them, so the alternatives are checked with AND semantics.
+
+        Args:
+            receiver: Receiver resource from IS-04
+            sdp_flow_caps: CCF Caps from SDP conversion
+            flow_media_type: media type string derived from the SDP caps
+
+        Returns:
+            tuple: (success, error_message) where success is True if compatible,
+                   False with error message if not compatible or error occurred
+        """
+        try:
+            # Get receiver CCF capabilities from IS-04 and convert to CCF Caps
+            receiver_ccf_caps = self._get_receiver_ccf_capabilities(receiver)
+
+            if not receiver_ccf_caps:
+                # If receiver has no capability constraints defined, assume compatibility
+                return True, ""
+
+            # Convert receiver JSON caps to CCF Caps object
+            try:
+                receiver_caps = convert_caps_json_to_caps(receiver_ccf_caps).get()  # sort by preference
+            except Exception as e:
+                return False, "Receiver {} caps JSON to CCF conversion failed: {}".format(receiver["id"], e)
+
+            print("RECEIVER CAPS:\n{}\n".format(str(receiver_caps)))
+
+            # Get the primary capability set from SDP
+            if len(sdp_flow_caps.capsets) == 0:
+                return False, "Receiver {} SDP transport file or Flow produced no capability sets".format(receiver["id"])
+
+            primary_capset = sdp_flow_caps.capsets[0]
+
+            print("SDP Transport File or Flow CAPS:\n{}\n".format(str(primary_capset)))
+
+            and_consets = []
+
+            if flow_media_type == "video/raw":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling)
+                and_consets = [
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoRaw),
+                        make_con(CapFormatComponentDepth, 10),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_422)),
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoRaw),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingRGB)),
+                ]
+            elif flow_media_type == "video/jxsv":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel, CapFormatSublevel)
+                
+                # If the current stream profile is a TDC profile, as pre TR-10-15 Part 1 the
+                # Sender is requried to also support the base JPEG XS profile.
+                profile_values = primary_capset[CapFormatProfile].value.values
+
+                if profile_values and profile_values[0] == JxsvProfileTDC444_12:
+                    and_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_422),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12, JxsvProfileTDC444_12)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingRGB),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12, JxsvProfileTDC444_12)),
+                    ]
+                else:
+                    and_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_422),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoJxsv),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingRGB),
+                            make_con(CapFormatProfile, JxsvProfileHigh444_12)),
+                    ]
+
+            elif flow_media_type == "video/H265":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel)
+
+                # If the current stream profile is a 444 profile, as pre TR-10-15 Part 2 the
+                # Sender is requried to also support the base HEVC profile.
+                profile_values = primary_capset[CapFormatProfile].value.values
+
+                if profile_values and (profile_values[0] == H265ProfileMain10_444 or profile_values[0] == H265ProfileMain_444):
+                    and_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420, SamplingYCbCr_444),
+                            make_con(CapFormatProfile, CodecProfileMain, H265ProfileMain_444)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420, SamplingYCbCr_444),
+                            make_con(CapFormatProfile, H265ProfileMain10, H265ProfileMain10_444)),
+                    ]
+                else:
+                    and_consets = [
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                            make_con(CapFormatProfile, CodecProfileMain)),
+                        alt_conset("Check Video",
+                            make_con(CapFormatMediaType, VideoH265),
+                            make_con(CapFormatComponentDepth, 8, 10),
+                            make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                            make_con(CapFormatProfile, H265ProfileMain10)),
+                    ]
+
+            elif flow_media_type == "video/H264":
+                checkCons = check_conset("Check Video", primary_capset,
+                    CapFormatMediaType, CapFormatComponentDepth, CapFormatColorSampling,
+                    CapFormatProfile, CapFormatLevel)
+                and_consets = [
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoH264),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                        make_con(CapFormatProfile, CodecProfileMain)),
+                    alt_conset("Check Video",
+                        make_con(CapFormatMediaType, VideoH264),
+                        make_con(CapFormatComponentDepth, 8),
+                        make_con(CapFormatColorSampling, SamplingYCbCr_420),
+                        make_con(CapFormatProfile, H264ProfileHigh)),
+                ]
+            elif flow_media_type in ("audio/L16", "audio/L20", "audio/L24"):
+                checkCons = check_conset("Check Audio", primary_capset,
+                    CapFormatMediaType, CapFormatSampleDepth, CapFormatSampleRate,
+                    CapFormatChannelCount, CapTransportPacketTime)
+                # A Receiver must support L16/16-bit and L24/24-bit at 48 kHz, for 1, 2 and 8 channels.
+                and_consets = [
+                    alt_conset("Check Audio",
+                        make_con(CapFormatMediaType, media),
+                        make_con(CapFormatSampleDepth, depth),
+                        make_con(CapFormatSampleRate, 48000),
+                        make_con(CapFormatChannelCount, channels),
+                        make_con(CapTransportPacketTime, 1))
+                    for media, depth in ((AudioL16, 16), (AudioL24, 24))
+                    for channels in (1, 2, 8)
+                ]
+            elif flow_media_type == "audio/AM824":
+                checkCons = check_conset("Check Audio", primary_capset,
+                    CapFormatMediaType, CapFormatSampleRate, CapFormatChannelCount,
+                    CapTransportPacketTime)
+                and_consets = [
+                    alt_conset("Check Audio",
+                        make_con(CapFormatMediaType, AudioAM824),
+                        make_con(CapFormatSampleRate, 48000),
+                        make_con(CapFormatChannelCount, 2, 8),
+                        make_con(CapTransportPacketTime, 1))
+                ]                
+            else:
+                return False, "Receiver {} invalid media type {}".format(receiver["id"], flow_media_type)
+
+            if not conset_included_in_caps(checkCons, receiver_caps, True):
+                return False, "Receiver {} capabilities are not precise. Using INFINITE RANGE or UNSPECIFIED capability".format(receiver["id"])
+
+            # A Receiver must support EVERY AIMS format alternative (AND semantics).
+            for and_conset in and_consets:
+                if not conset_included_in_caps(and_conset, receiver_caps, True):
+                    return False, "Receiver {} capabilities do not support all required AIMS format alternatives. Using INFINITE RANGE or UNSPECIFIED capability".format(receiver["id"])
+
+            return True, ""
 
         except Exception as e:
             return False, "Receiver {} CCF capability verification error: {}".format(receiver["id"], e)

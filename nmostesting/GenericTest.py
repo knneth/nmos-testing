@@ -29,6 +29,8 @@ from .TestResult import Test
 from . import Config as CONFIG
 from .mocks.Auth import AuthServer
 
+from .IPMXUtils import filter_resources
+
 
 NMOS_WIKI_URL = "https://github.com/AMWA-TV/nmos/wiki"
 
@@ -621,10 +623,11 @@ class GenericTest(object):
         return endpoints
 
     def do_test_api_resource(self, resource, response_code, api):
-        test = Test("{} /x-nmos/{}/{}{}".format(resource[1]['method'].upper(),
+        test_path = "{} /x-nmos/{}/{}{}".format(resource[1]['method'].upper(),
                                                 api,
                                                 self.apis[api]["version"],
-                                                resource[0].rstrip("/")), self.auto_test_name(api))
+                                               resource[0].rstrip("/"))
+        test = Test(test_path, self.auto_test_name(api))
 
         endpoints = NMOSUtils.sampled_list(self.generate_parameterized_endpoints(resource[0], resource[1]['params']))
         for endpoint, param_values in endpoints:
@@ -637,7 +640,7 @@ class GenericTest(object):
                                     if param_values else entity_message)
         if len(endpoints) == 0:
             # There were no saved entities found, so we can't test this parameterised URL
-            return test.UNCLEAR("No resources found to perform this test")
+            return test.UNCLEAR("No resources found to perform this test: {}".format(test_path))
         return test.PASS()
 
     def check_api_resource(self, test, resource, response_code, api, path):
@@ -682,10 +685,16 @@ class GenericTest(object):
 
     def save_subresources(self, path, response):
         """Get IDs contained within an array JSON response such that they can be interrogated individually"""
+
+        def last_segment(p: str) -> str:
+            p = p.rstrip('/')
+            return p.rsplit('/', 1)[-1] if p else ""
+
         subresources = list()
         try:
             if isinstance(response.json(), list):
-                for entry in response.json():
+                resources = filter_resources(response.json(), last_segment(path))
+                for entry in resources:
                     # In general, lists return fully fledged objects which each have an ID
                     if isinstance(entry, dict) and "id" in entry:
                         subresources.append(entry["id"])
@@ -693,6 +702,8 @@ class GenericTest(object):
                     elif isinstance(entry, str) and entry.endswith("/"):
                         res_id = entry.rstrip("/")
                         subresources.append(res_id)
+                    elif isinstance(entry, str):
+                        subresources.append(entry)
             elif isinstance(response.json(), dict):
                 for key, value in response.json().items():
                     # Cover the audio channel mapping spec case with dictionary keys

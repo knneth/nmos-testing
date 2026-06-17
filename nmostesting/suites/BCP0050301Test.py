@@ -490,7 +490,8 @@ class BCP0050301Test(GenericTest):
                         sdp_lines = [sdp_line.replace("\r", "") for sdp_line in manifest_href_response.text.split("\n")]
 
                         ok, msg = self.check_privacy_attribute(True, sender, len(constraints),
-                                                               constraints[0], active["transport_params"][0], sdp_lines)
+                                                               constraints[0], active["transport_params"][0],
+                                                               sdp_lines, null_mode)
                         if not ok:
                             return test.FAIL("sender {} : invalid privacy capability, error {}"
                                              .format(sender["id"], msg))
@@ -981,7 +982,8 @@ class BCP0050301Test(GenericTest):
                             len(constraints),
                             constraints[0],
                             active["transport_params"][0],
-                            sdp_lines)
+                            sdp_lines,
+                            null_mode)
                         if not ok:
                             return test.FAIL("receiver {} : invalid privacy capability, error {}"
                                              .format(receiver["id"], msg))
@@ -2651,19 +2653,19 @@ class BCP0050301Test(GenericTest):
                 return False, "{} {} : {} active value {} is not within constraints {}".format(
                     identity, sender_receiver["id"], privacy_ecdh_curve, staged[privacy_ecdh_curve], enums)
 
-        # check 'mode' constraints.
+        # check 'mode' constraints. NULL is allowed here and further restricted by the tests.
         if ecdh:
             allowed_rtp_modes = ("AES-128-CTR", "AES-256-CTR", "AES-128-CTR_CMAC-64", "AES-256-CTR_CMAC-64",
                                  "AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD", "ECDH_AES-128-CTR",
                                  "ECDH_AES-256-CTR", "ECDH_AES-128-CTR_CMAC-64", "ECDH_AES-256-CTR_CMAC-64",
-                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD")
+                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD", "NULL")
             allowed_usb_modes = ("AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD",
-                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD")
+                                 "ECDH_AES-128-CTR_CMAC-64-AAD", "ECDH_AES-256-CTR_CMAC-64-AAD", "NULL")
         else:
             # ECDH modes must not be allowed if an ECDH curve is not supported
             allowed_rtp_modes = ("AES-128-CTR", "AES-256-CTR", "AES-128-CTR_CMAC-64", "AES-256-CTR_CMAC-64",
-                                 "AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD")
-            allowed_usb_modes = ("AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD")
+                                 "AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD", "NULL")
+            allowed_usb_modes = ("AES-128-CTR_CMAC-64-AAD", "AES-256-CTR_CMAC-64-AAD", "NULL")
 
         allowed_modes = tuple(set(allowed_rtp_modes + allowed_usb_modes))
 
@@ -3075,7 +3077,7 @@ class BCP0050301Test(GenericTest):
         else:
             return False, warning
 
-    def check_privacy_attribute(self, is_sender, sender_receiver, legs, constraints, active, sdp_lines):
+    def check_privacy_attribute(self, is_sender, sender_receiver, legs, constraints, active, sdp_lines, null_mode):
 
         if is_sender:
             identity = "sender"
@@ -3188,9 +3190,15 @@ class BCP0050301Test(GenericTest):
                         active[privacy_key_version])
                     return False, msg
 
-        if ((found_session > 1) or (found_media != 0 and found_media != legs)
-                or (found_session == 0 and found_media == 0)):
+        if (not null_mode and ((found_session > 1) or (found_media != 0 and found_media != legs)
+                               or (found_session == 0 and found_media == 0))):
             msg = "{} {} : missing privacy session/media attribute(s) in SDP transport file, " \
+                "found {} session level, {} media level, has {} legs".format(
+                    identity, sender_receiver["id"], found_session, found_media, legs)
+            return False, msg
+
+        if null_mode and (found_session != 0 or found_media != 0):
+            msg = "{} {} : invalid privacy session/media attribute(s) in SDP transport file, " \
                 "found {} session level, {} media level, has {} legs".format(
                     identity, sender_receiver["id"], found_session, found_media, legs)
             return False, msg
@@ -3220,8 +3228,12 @@ class BCP0050301Test(GenericTest):
 
             # This is a SHOULD for VSF/PEP specification made MUST by the NMOS specification to
             # enhance interoperability.
-            if not found_short or not found_full:
+            if not null_mode and (not found_short or not found_full):
                 return False, "{} {} : extmap attributes for PEP extension headers are missing".format(
+                    identity, sender_receiver["id"])
+
+            if null_mode and (found_short or found_full):
+                return False, "{} {} : extmap attributes for PEP extension headers are invalid".format(
                     identity, sender_receiver["id"])
 
         return True, ""

@@ -576,7 +576,7 @@ class IS05Utils(NMOSUtils):
                 elif len(sdp_media_sections) > 0:
                     tp_compare.append("m=" + sdp_media_sections[0])
                 if len(tp_compare) != len(a_response["transport_params"]):
-                    return False, "Number of SDP groups do not match the length of the 'transport_params' array"
+                    return False, "Number of SDP groups do not match the length of the 'transport_params' array. SDP groups: {}, transport_params groups: {}, SDP '{}'".format(len(tp_compare), len(a_response["transport_params"]), sdp_response.text)
                 for index, sdp_data in enumerate(tp_compare):
                     transport_params = a_response["transport_params"][index]
                     media_line = re.search(r"m=([a-z]+) ([0-9]+) RTP/AVP ([0-9]+)", sdp_data)

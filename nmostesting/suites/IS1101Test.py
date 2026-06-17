@@ -24,6 +24,7 @@ from ..IS04Utils import IS04Utils
 from ..IS05Utils import IS05Utils
 import datetime
 from ..IS11Utils import IS11Utils
+from ..MatroxEdid import parse_edid
 
 COMPAT_API_KEY = "streamcompatibility"
 CONTROLS = "controls"
@@ -72,6 +73,8 @@ class IS1101Test(GenericTest):
         self.node_url = self.apis[NODE_API_KEY]["url"]
         self.conn_url = self.apis[CONN_API_KEY]["url"]
         self.connected_outputs = []
+        self.video_connected_outputs = []
+        self.audio_connected_outputs = []
         self.not_edid_connected_outputs = []
         self.edid_connected_outputs = []
         self.reference_senders = {}
@@ -143,6 +146,8 @@ class IS1101Test(GenericTest):
         self.adjust_to_caps_inputs = list(filter(self.is_input_adjust_to_caps, self.base_edid_inputs))
 
         self.connected_outputs = list(filter(self.is_output_connected, self.outputs))
+        self.video_connected_outputs = []
+        self.audio_connected_outputs = []
         self.disconnected_outputs = list(set(self.outputs) - set(self.connected_outputs))
 
         self.edid_outputs = list(filter(self.has_output_edid_support, self.outputs))
@@ -519,13 +524,13 @@ class IS1101Test(GenericTest):
         if (numerator == 30 or numerator == 25) and denominator == 1:
             return {"numerator": numerator * 2, "denominator": 1}
         if (numerator == 60 or numerator == 50) and denominator == 1:
-            return {"numerator": numerator / 2, "denominator": 1}
+            return {"numerator": int(numerator / 2), "denominator": 1}
         if numerator == 24 and denominator == 1:
             return {"numerator": 30, "denominator": 1}
         if (numerator == 30000 or numerator == 25000) and denominator == 1001:
             return {"numerator": numerator * 2, "denominator": 1001}
         if (numerator == 60000 or numerator == 50000) and denominator == 1001:
-            return {"numerator": numerator / 2, "denominator": 1001}
+            return {"numerator": int(numerator / 2), "denominator": 1001}
         return "grain_rate not valid"
 
     def get_another_sample_rate(self, sample_rate):
@@ -2282,14 +2287,16 @@ class IS1101Test(GenericTest):
 
                 default_edid = self.get_effective_edid(test, input_id)
 
+                another_refresh_rate = self.get_another_grain_rate(
+                                        self.flow_grain_rate[sender_id]
+                                    )
+                
                 self.another_grain_rate_constraints[sender_id] = {
                     "constraint_sets": [
                         {
                             "urn:x-nmos:cap:format:grain_rate": {
                                 "enum": [
-                                    self.get_another_grain_rate(
-                                        self.flow_grain_rate[sender_id]
-                                    )
+                                    another_refresh_rate
                                 ]
                             }
                         }
@@ -2303,16 +2310,19 @@ class IS1101Test(GenericTest):
                 time.sleep(CONFIG.STABLE_STATE_DELAY)
                 if not valid:
                     return test.FAIL(
-                        "Unexpected response from the Node API: {}".format(response)
+                        "Unexpected response from the streamcompatibility API: {}".format(response)
                     )
                 if response.status_code != 200:
                     return test.FAIL(
-                        "The sender {} is not available in the Node API request: {}".format(
+                        "The sender {} is not available in the streamcompatibility API request: {}".format(
                             sender_id, response
                         )
                     )
                 if response.status_code == 422:
+                    do_not_accept_constraint = True
                     print("Device does not accept grain_rate constraint")
+                else:
+                    do_not_accept_constraint = False
 
                 valid, response = self.do_request(
                     "GET",
@@ -2419,11 +2429,11 @@ class IS1101Test(GenericTest):
 
                 if not valid:
                     return test.FAIL(
-                        "Unexpected response from the Node API: {}".format(response)
+                        "Unexpected response from the streamcompatibility API: {}".format(response)
                     )
                 if response.status_code != 200:
                     return test.FAIL(
-                        "The sender {} is not available in the Node API request: {}".format(
+                        "The sender {} is not available in the streamcompatibility API request: {}".format(
                             sender_id, response
                         )
                     )
@@ -2435,10 +2445,8 @@ class IS1101Test(GenericTest):
                 except KeyError as e:
                     return test.FAIL("Unable to find expected key: {}".format(e))
 
-                if state == "active_constraints_violation":
-                    return test.UNCLEAR("This device can not constraint grain_rate")
-
-                if state in ["awaiting_essence", "no_essence"]:
+                # active constraints violation may be temporary as the source changes its essence
+                if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                     for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
                         valid, response = self.do_request(
                             "GET", self.build_sender_status_url(sender_id)
@@ -2458,10 +2466,42 @@ class IS1101Test(GenericTest):
                         except KeyError as e:
                             return test.FAIL("Unable to find expected key: {}".format(e))
 
-                        if state in ["awaiting_essence", "no_essence"]:
+                        if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                             time.sleep(CONFIG.STABLE_STATE_DELAY)
                         else:
                             break
+
+                        print("State: {}".format(state))
+
+                # Note that the modification of the EDID preferred mode based on the constraints is
+                # required only if the sender state is active_constraints_violation. A device that
+                # use an internal scaler to comply with the constraints is not required to modify 
+                # its EDID which sometime is the only interoperable choice (ex. Windows 11).
+                if state != "constrained":
+                    if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                        print(f"CHECK THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate}")
+                        answer = input("Press Enter if EDID is valid, type NO otherwise: ")
+                        edid_is_compliant = answer.strip().lower() not in ("no", "n")
+                    else:
+                        edid_is_compliant = self.check_edid_preferred_grain_rate(
+                            test, input_id, another_refresh_rate
+                        )
+                        if edid_is_compliant:
+                            print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is VALID")
+                        else:
+                            print(f"THE SOURCE EDID for a preferred refresh rate of {another_refresh_rate} is INVALID")
+
+                # Must come after awaiting_essence and no_essence loop
+                if do_not_accept_constraint:
+                    return test.UNCLEAR("This device cannot constrain the grain_rate")
+
+                # Must come after awaiting_essence and no_essence loop
+                if state == "active_constraints_violation" or do_not_accept_constraint:
+                    if edid_is_compliant:
+                        return test.UNCLEAR("This device cannot constrain the grain_rate ### but the EDID is VALID ###")
+                    else:
+                        return test.UNCLEAR("This device cannot constrain the grain_rate ### and the EDID is INVALID ###")
+
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""
                                      .format(sender_id, state))
@@ -2478,7 +2518,7 @@ class IS1101Test(GenericTest):
                 if response.status_code != 200:
                     return test.FAIL(
                         "The streamcompatibility request for sender {} status has failed: {}".format(
-                            sender_id, response
+                            sender_id, response.json()
                         )
                     )
 
@@ -2631,14 +2671,16 @@ class IS1101Test(GenericTest):
 
                 default_edid = self.get_effective_edid(test, input_id)
 
+                another_sample_rate = self.get_another_sample_rate(
+                                        self.flow_sample_rate[sender_id]
+                                    )
+                
                 self.another_sample_rate_constraints[sender_id] = {
                     "constraint_sets": [
                         {
                             "urn:x-nmos:cap:format:sample_rate": {
                                 "enum": [
-                                    self.get_another_sample_rate(
-                                        self.flow_sample_rate[sender_id]
-                                    )
+                                    another_sample_rate
                                 ]
                             }
                         }
@@ -2661,7 +2703,10 @@ class IS1101Test(GenericTest):
                         )
                     )
                 if response.status_code == 422:
+                    do_not_accept_constraint = True
                     print("Device does not accept grain_rate constraint")
+                else:
+                    do_not_accept_constraint = False
 
                 valid, response = self.do_request(
                     "GET",
@@ -2783,10 +2828,8 @@ class IS1101Test(GenericTest):
                 except KeyError as e:
                     return test.FAIL("Unable to find expected key: {}".format(e))
 
-                if state == "active_constraints_violation":
-                    return test.UNCLEAR("This device can not constraint sample_rate")
-
-                if state in ["awaiting_essence", "no_essence"]:
+                # active constraints violation may be temporary as the source changes its essence
+                if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                     for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
                         valid, response = self.do_request(
                             "GET", self.build_sender_status_url(sender_id)
@@ -2806,10 +2849,42 @@ class IS1101Test(GenericTest):
                         except KeyError as e:
                             return test.FAIL("Unable to find expected key: {}".format(e))
 
-                        if state in ["awaiting_essence", "no_essence"]:
+                        if state in ["awaiting_essence", "no_essence", "active_constraints_violation"]:
                             time.sleep(CONFIG.STABLE_STATE_DELAY)
                         else:
                             break
+                        
+                        print("State: {}".format(state))
+
+                # Note that the modification of the EDID preferred mode based on the constraints is
+                # required only if the sender state is active_constraints_violation. A device that
+                # use an internal scaler to comply with the constraints is not required to modify 
+                # its EDID which sometime is the only interoperable choice (ex. Windows 11).
+                if state != "constrained":
+                    if CONFIG.IS11_SOURCE_EDID_VERIFICATION:
+                        print(f"CHECK THE SOURCE EDID for a preferred sample rate of {another_sample_rate}")
+                        answer = input("Press Enter if EDID is valid, type NO otherwise: ")
+                        edid_is_compliant = answer.strip().lower() not in ("no", "n")
+                    else:
+                        edid_is_compliant = self.check_edid_supports_only_audio_sample_rate(
+                            test, input_id, another_sample_rate
+                        )
+                        if edid_is_compliant:
+                            print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is VALID")
+                        else:
+                            print(f"THE SOURCE EDID for a preferred sample rate of {another_sample_rate} is INVALID")
+
+                # Must come after awaiting_essence and no_essence loop
+                if do_not_accept_constraint:
+                    return test.UNCLEAR("This device cannot constrain the sample_rate")
+
+                # Must come after awaiting_essence and no_essence loop
+                if state == "active_constraints_violation" or do_not_accept_constraint:
+                    if edid_is_compliant:
+                        return test.UNCLEAR("This device cannot constrain the sample_rate ### but the EDID is VALID ###")
+                    else:
+                        return test.UNCLEAR("This device cannot constrain the sample_rate ### and the EDID is INVALID ###")
+
                 if state != "constrained":
                     return test.FAIL("Expected state of sender {} is \"constrained\", got \"{}\""
                                      .format(sender_id, state))
@@ -3146,6 +3221,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
         format = "urn:x-nmos:format:video"
+        self.video_connected_outputs = []
         activated_receivers = 0
         valid, response = self.is11_utils.get_receivers_with_or_without_outputs_id(self.receivers, format)
         if not valid:
@@ -3168,7 +3244,28 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
+            # Verify all outputs of this receiver are connected.
+            valid, response = self.do_request(
+                "GET", self.compat_url + "receivers/" + receiver_id + "/outputs/"
+            )
+            if not valid:
+                return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+            if response.status_code != 200:
+                return test.FAIL("The receiver's outputs {} streamcompatibility request has failed: {}"
+                                 .format(receiver_id, response))
+            try:
+                receiver_outputs = response.json()
+            except json.JSONDecodeError:
+                return test.FAIL("Non-JSON response returned from the Stream Compatibility Management API")
+            except KeyError as e:
+                return test.FAIL("Unable to find expected key: {}".format(e))
+
+            # Requirement: All outputs associated with the receiver must be connected
+            if not all(oid in self.connected_outputs for oid in receiver_outputs):
+                return test.WARNING("All outputs associated with the video receiver must be connected")
+
+            self.video_connected_outputs.extend(receiver_outputs)
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3185,8 +3282,8 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self.outputs) == 0:
-            return test.UNCLEAR("No IS-11 receiver outputs")
+        if len(self.video_connected_outputs) == 0:
+            return test.UNCLEAR("No IS-11 connected video receiver outputs")
         """
         This test requires streaming from a Sender in order to
         verify the state of the Receiver and the associated outputs.
@@ -3197,7 +3294,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.outputs:
+        for output_id in self.video_connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3282,6 +3379,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
         format = "urn:x-nmos:format:audio"
+        self.audio_connected_outputs = []
         activated_receivers = 0
         valid, response = self.is11_utils.get_receivers_with_or_without_outputs_id(self.receivers, format)
         if not valid:
@@ -3304,7 +3402,28 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
+            # Verify all outputs of this receiver are connected.
+            valid, response = self.do_request(
+                "GET", self.compat_url + "receivers/" + receiver_id + "/outputs/"
+            )
+            if not valid:
+                return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+            if response.status_code != 200:
+                return test.FAIL("The receiver's outputs {} streamcompatibility request has failed: {}"
+                                 .format(receiver_id, response))
+            try:
+                receiver_outputs = response.json()
+            except json.JSONDecodeError:
+                return test.FAIL("Non-JSON response returned from the Stream Compatibility Management API")
+            except KeyError as e:
+                return test.FAIL("Unable to find expected key: {}".format(e))
+
+            # Requirement: All outputs associated with the receiver must be connected
+            if not all(oid in self.connected_outputs for oid in receiver_outputs):
+                return test.WARNING("All outputs associated with the audio receiver must be connected")
+
+            self.audio_connected_outputs.extend(receiver_outputs)
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3321,8 +3440,8 @@ class IS1101Test(GenericTest):
         """
         if len(self.receivers_with_outputs) == 0:
             return test.UNCLEAR("No IS-11 receivers")
-        if len(self.outputs) == 0:
-            return test.UNCLEAR("No IS-11 receiver outputs")
+        if len(self.audio_connected_outputs) == 0:
+            return test.UNCLEAR("No IS-11 connected audio receiver outputs")
         """
         This test requires streaming from a Sender in order to
         verify the state of the Receiver and the associated outputs.
@@ -3333,7 +3452,7 @@ class IS1101Test(GenericTest):
             return test.DISABLED("Please configure IS11_REFERENCE_SENDER_NODE_API_URL"
                                  " and IS11_REFERENCE_SENDER_CONNECTION_API_URL in Config.py")
 
-        for output_id in self.outputs:
+        for output_id in self.audio_connected_outputs:
             valid, response = self.do_request('GET', self.compat_url + "outputs/" + output_id + "/properties/")
             if not valid:
                 return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
@@ -3472,7 +3591,7 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3517,7 +3636,7 @@ class IS1101Test(GenericTest):
             if not valid:
                 return test.FAIL(response)
             activated_receivers = response
-            break
+            
         try:
             if (activated_receivers < len(self.is11_utils.receivers_with_or_without_outputs)):
                 return test.WARNING("There are no compatible senders for {} receivers"
@@ -3577,6 +3696,25 @@ class IS1101Test(GenericTest):
                     return test.FAIL(response)
 
                 state = response["state"]
+
+                if state in ["awaiting_essence", "no_essence"]:
+                    for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
+                        valid, response = self.do_request(
+                            "GET", self.build_sender_status_url(senderId)
+                        )
+                        if not valid:
+                            return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+                        if response.status_code != 200:
+                            return test.FAIL(
+                                "The streamcompatibility request for sender {} status has failed: {}"
+                                .format(senderId, response.json())
+                            )
+                        state = response.json()["state"]
+                        if state in ["awaiting_essence", "no_essence"]:
+                            time.sleep(CONFIG.STABLE_STATE_DELAY)
+                        else:
+                            break
+
                 state_expected = "unconstrained"
                 if state != state_expected:
                     if state == self.state_awaiting_essence or state == self.state_no_essence:
@@ -3622,6 +3760,25 @@ class IS1101Test(GenericTest):
                     return test.FAIL(response)
 
                 state = response["state"]
+
+                if state in ["awaiting_essence", "no_essence"]:
+                    for i in range(0, CONFIG.STABLE_STATE_ATTEMPTS):
+                        valid, response = self.do_request(
+                            "GET", self.build_sender_status_url(senderId)
+                        )
+                        if not valid:
+                            return test.FAIL("Unexpected response from the streamcompatibility API: {}".format(response))
+                        if response.status_code != 200:
+                            return test.FAIL(
+                                "The streamcompatibility request for sender {} status has failed: {}"
+                                .format(senderId, response.json())
+                            )
+                        state = response.json()["state"]
+                        if state in ["awaiting_essence", "no_essence"]:
+                            time.sleep(CONFIG.STABLE_STATE_DELAY)
+                        else:
+                            break
+
                 state_expected = "unconstrained"
                 if state != state_expected:
                     if state == self.state_awaiting_essence or state == self.state_no_essence:
@@ -3681,7 +3838,7 @@ class IS1101Test(GenericTest):
         return self.has_i_o(id, "receiver")
 
     def is_input_adjust_to_caps(self, id):
-        return self.has_property(id, "input", "adjust_to_caps")
+        return self.has_boolean_property_true(id, "input", "adjust_to_caps")
 
     def has_property(self, id, type, property):
         i_o = "inputs/" if type == "input" else "outputs/"
@@ -3784,6 +3941,78 @@ class IS1101Test(GenericTest):
             raise NMOSTestException(
                 test.FAIL("Non-JSON response returned from Node API")
             )
+
+    def check_edid_supports_only_audio_sample_rate(self, test, input_id, expected_sample_rate):
+        """Fetch the effective EDID for input_id and verify that the only
+        audio sample rate declared (union across all CTA-861 Short Audio
+        Descriptors) is expected_sample_rate (a dict {"numerator": Hz}).
+        Returns False on any parse/fetch error or when no SAD is present
+        or when the EDID exposes any rate other than the expected one.
+        Prints debug info to the console.
+        """
+        print("[EDID-AUDIO] input_id={} expected={}".format(input_id, expected_sample_rate))
+        try:
+            raw = self.get_effective_edid(test, input_id)
+        except Exception as e:
+            print("[EDID-AUDIO] fetch FAILED: {}".format(e))
+            return False
+        print("[EDID-AUDIO] raw length={} bytes".format(len(raw)))
+        try:
+            edid = parse_edid(raw)
+        except Exception as e:
+            print("[EDID-AUDIO] parse FAILED: {}".format(e))
+            print("[EDID-AUDIO] raw hex={}".format(bytes(raw).hex()))
+            return False
+        print("[EDID-AUDIO] header_ok={} checksums_ok={} ext_count={}".format(
+            edid.is_valid_header(), edid.checksums_ok(), len(edid.extensions)))
+        sads = edid.short_audio_descriptors()
+        print("[EDID-AUDIO] SADs={}".format(sads))
+        rates = edid.audio_sample_rates()
+        expected_hz = expected_sample_rate["numerator"]
+        compliant = rates == [expected_hz]
+        print("[EDID-AUDIO] rates_declared={} expected={} compliant={}".format(
+            rates, [expected_hz], compliant))
+        return compliant
+
+    def check_edid_preferred_grain_rate(self, test, input_id, expected_grain_rate):
+        """Fetch the effective EDID for input_id and check whether its
+        preferred-timing refresh rate exactly matches expected_grain_rate
+        (a dict {"numerator": N, "denominator": D}). Exact match accounts
+        for the EDID's 10 kHz pixel-clock quantization, so 60/1 and
+        60000/1001 are properly distinguished. Returns False on any
+        parse/fetch error or when no preferred timing is present.
+        Prints debug info to the console.
+        """
+        num = expected_grain_rate["numerator"]
+        den = expected_grain_rate["denominator"]
+        print("[EDID-VIDEO] input_id={} expected={}/{} ({:.4f} Hz)".format(
+            input_id, num, den, num / den))
+        try:
+            raw = self.get_effective_edid(test, input_id)
+        except Exception as e:
+            print("[EDID-VIDEO] fetch FAILED: {}".format(e))
+            return False
+        print("[EDID-VIDEO] raw length={} bytes".format(len(raw)))
+        try:
+            edid = parse_edid(raw)
+        except Exception as e:
+            print("[EDID-VIDEO] parse FAILED: {}".format(e))
+            print("[EDID-VIDEO] raw hex={}".format(bytes(raw).hex()))
+            return False
+        print("[EDID-VIDEO] header_ok={} checksums_ok={} ext_count={}".format(
+            edid.is_valid_header(), edid.checksums_ok(), len(edid.extensions)))
+        dtd = edid.preferred_timing_fields()
+        print("[EDID-VIDEO] preferred DTD fields={}".format(dtd))
+        pref = edid.preferred_resolution()
+        print("[EDID-VIDEO] preferred (w,h,fps)={}".format(pref))
+        if dtd is not None:
+            encoded = dtd["pixel_clock_10khz"] * 10_000 * den
+            ideal = dtd["h_total"] * dtd["v_total"] * num
+            print("[EDID-VIDEO] exact-match check: encoded={} ideal={} diff={} tol={}".format(
+                encoded, ideal, encoded - ideal, 10_000 * den))
+        compliant = edid.matches_preferred_grain_rate(num, den)
+        print("[EDID-VIDEO] compliant={}".format(compliant))
+        return compliant
 
     def get_effective_edid(self, test, input_id):
         valid, response = self.do_request("GET", self.compat_url + "inputs/" + input_id + "/edid/effective")

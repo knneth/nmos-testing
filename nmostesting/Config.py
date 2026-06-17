@@ -49,6 +49,22 @@ HEARTBEAT_INTERVAL = 5
 # Note: Currently this is only used for testing IS-04 registries. Node behaviour is expected to match the defaults.
 GARBAGE_COLLECTION_TIMEOUT = 12
 
+# Network interface to use for multicast operations (e.g., "eth0", "wlan0", "lo", or an IP address like "192.168.1.100")
+# Set to None for automatic detection, or specify the interface name/IP for multi-homed systems
+# Examples:
+#   MULTICAST_INTERFACE = None          # Auto-detect (default)
+#   MULTICAST_INTERFACE = "eth0"        # Use specific Ethernet interface (Linux)
+#   MULTICAST_INTERFACE = "192.168.1.100"  # Use specific IP address
+#   MULTICAST_INTERFACE = "0.0.0.0"     # Use INADDR_ANY (good for Windows)
+#   MULTICAST_INTERFACE = "NIC2"        # Windows interface name (will query ipconfig)
+#   MULTICAST_INTERFACE = "Ethernet"    # Windows interface name
+MULTICAST_INTERFACE = None
+
+# For Windows systems with multicast issues, you can try setting this to "0.0.0.0"
+# which uses INADDR_ANY and lets Windows choose the best interface.
+# Or specify your actual Windows interface name like "NIC2" - run 'ipconfig /all' to see available interfaces
+# MULTICAST_INTERFACE = "0.0.0.0"
+
 # Number of seconds to wait for messages to appear via a WebSocket subscription
 WS_MESSAGE_TIMEOUT = 2
 
@@ -214,6 +230,8 @@ IS11_REFERENCE_SENDER_CONNECTION_API_URL = ""
 # Stability delay for any request on IS-11
 STABLE_STATE_DELAY = 3
 STABLE_STATE_ATTEMPTS = 5
+
+IS11_SOURCE_EDID_VERIFICATION = False
 
 # For some tests we do not need the various FLASK_APPS servers
 DISABLE_ALL_FLASK_SERVERS = True
@@ -396,9 +414,8 @@ SPECIFICATIONS = {
     },
     "bcp-004-02": {
         "repo": "bcp-004-02",
-        "branch": "v1.0-dev",
-        "versions": ["v1.0-dev"],
-        "default_version": "v1.0-dev",
+        "versions": ["v1.0"],
+        "default_version": "v1.0",
         "apis": {
             "sender-caps": {
                 "name": "Sender Capabilities"
@@ -406,11 +423,10 @@ SPECIFICATIONS = {
         }
     },
     "bcp-007-02": {
-        "repo": "proposal_bcp-007-02",
-        "url": "https://github.com/alabou/",
-        "branch": "main",
-        "versions": ["main"],
-        "default_version": "main",
+        "repo": "bcp-007-02",
+        "branch": "v1.0-dev",
+        "versions": ["v1.0-dev"],
+        "default_version": "v1.0-dev",
         "apis": {
             "usb-transport": {
                 "name": "USB Transport Parameters Schemas"
@@ -440,9 +456,9 @@ SPECIFICATIONS = {
     "nmos-parameter-registers": {
         "repo": "nmos-parameter-registers",
         "url": "https://github.com/alabou/",
-        "branch": "testing-1212",
-        "versions": ["testing-1212"],
-        "default_version": "testing-1212",
+        "branch": "IPMX",
+        "versions": ["IPMX"],
+        "default_version": "IPMX",
         "apis": {
             "caps-register": {
                 "name": "Capabilities Register"
