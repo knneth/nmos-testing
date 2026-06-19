@@ -103,6 +103,7 @@ from .suites import BCP0080201Test
 from .suites import BCP0040201Test
 from .suites import BCP0040101Test
 from .suites import IpmxSdpTest
+from .suites import MatroxCapabilitiesTest
 
 FLASK_APPS = []
 DNS_SERVER = None
@@ -701,8 +702,38 @@ TEST_DEFINITIONS = {
         }, {
             "spec_key": "bcp-004-01",
             "api_key": "receiver-caps"
+        }, {
+            "spec_key": "bcp-004-02",
+            "api_key": "sender-caps"
         }],
         "class": IpmxSdpTest.IpmxSdpTest
+    },
+    "Matrox-Capabilities": {
+        "name": "Matrox Advanced Capabilities",
+        "specs": [{
+            "spec_key": "is-04",
+            "api_key": "node"
+        }, {
+            "spec_key": "is-05",
+            "api_key": "connection"
+        }],
+        "extra_specs": [{
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "flow-register"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "sender-register"
+        }, {
+            "spec_key": "bcp-004-01",
+            "api_key": "receiver-caps"
+        }, {
+            "spec_key": "bcp-004-02",
+            "api_key": "sender-caps"
+        }, {
+            "spec_key": "nmos-parameter-registers",
+            "api_key": "caps-register"
+        }],
+        "class": MatroxCapabilitiesTest.MatroxCapabilitiesTest
     },
     "BCP-006-02-01": {
         "name": "BCP-006-02 NMOS With H.264",

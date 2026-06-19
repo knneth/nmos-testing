@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Note: The IS-11 test suite has been created before BCP-004-02 which
+#       provides Sender Capabilities. The test suite assumes the DuT
+#       supports an alternate audio sampling rate and an alternate 
+#       video grain rate.
+
 from functools import partial
 import time
 import re
