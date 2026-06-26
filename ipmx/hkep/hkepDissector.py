@@ -2149,6 +2149,96 @@ class HKEPDissector:
 
         return analysis_result
     
+    # Per-section reason string shown when a section is NOT VALIDATED because no
+    # complete exchange actually exercised it (positive-evidence absent).
+    SECTION_NO_EVIDENCE_REASON = {
+        "12.6": "no receiver-protocol AKE_PreInit/AKE_PreInitStatus handshake observed",
+        "12.7": "no non-receiver-protocol exchange (receiver=false, pairing=true) observed",
+        "13.1": "no locality-check activity (AKE_*_Info / LC_Init) observed",
+        "13.2": "RepeaterAuth phase not observed",
+        "13.3": "no RepeaterAuth_Stream_Manage observed (Sender may have used Null)",
+        "session_caching": "no RepeaterAuth_Send_Ack observed (no first-successful exchange to cache)",
+    }
+
+    @staticmethod
+    def _validation_status(applicable_count: int, all_errors: List[Dict]) -> str:
+        """
+        Map a section's outcome to a status string for JSON/reporting:
+          - 'NO_DATA' : no complete exchange exercised the section (nothing validated)
+          - 'FAILED'  : at least one error-severity violation
+          - 'ISSUES'  : warning-severity issues but no errors
+          - 'PASSED'  : exercised with no errors/warnings (info-severity notes don't count)
+
+        Info-severity items are informational annotations and never affect status.
+        """
+        if applicable_count == 0:
+            return 'NO_DATA'
+        if any(e.get('severity') == 'error' for e in all_errors):
+            return 'FAILED'
+        if any(e.get('severity') == 'warning' for e in all_errors):
+            return 'ISSUES'
+        return 'PASSED'
+
+    def _exchange_message_types(self, exchange: HKEPExchange) -> set:
+        """Return the set of HKEP message_type strings present in an exchange."""
+        return {m.get('hkep', {}).get('message_type') for m in exchange.messages}
+
+    def _exchange_exercises_section(self, section: str, exchange: HKEPExchange) -> bool:
+        """
+        Return True if this exchange actually contains the protocol activity that
+        section `section` is meant to validate (its "positive evidence").
+
+        A section may only report PASSED when at least one complete exchange exercises
+        it; otherwise it reports NOT VALIDATED (NO DATA) rather than a vacuous PASS.
+        Verified against VSF TR-10-5:2026. Receiver_AuthStatus (msg 18) is intentionally
+        never used here (§13.2.1: the Sender shall ignore it).
+        """
+        msgs = exchange.messages
+        types = self._exchange_message_types(exchange)
+
+        if section == "12.6":
+            # Receiver protocol: an AKE_PreInit with receiver=true plus its PreInitStatus response.
+            has_receiver_preinit = any(
+                m.get('hkep', {}).get('message_type') == 'AKE_PreInit'
+                and m.get('hkep', {}).get('receiver') is True
+                for m in msgs
+            )
+            return has_receiver_preinit and 'AKE_PreInitStatus' in types
+
+        if section == "12.7":
+            # Non-receiver protocol: AKE_PreInit with receiver=false and pairing=true (§12.7).
+            return any(
+                m.get('hkep', {}).get('message_type') == 'AKE_PreInit'
+                and m.get('hkep', {}).get('receiver') is False
+                and m.get('hkep', {}).get('pairing') is True
+                for m in msgs
+            )
+
+        if section == "13.1":
+            # Locality check (§13.1) was exercised if locality activity is present: the precompute
+            # Info messages (which carry *_LOCALITY_PRECOMPUTE_SUPPORT) and/or the LC exchange.
+            # Either Info message alone qualifies (a capture may not include both), as does LC_Init/
+            # LC_Send_L_prime/RTT_Challenge -- locality was actually performed.
+            return bool(types & {
+                'AKE_Transmitter_Info', 'AKE_Receiver_Info',
+                'LC_Init', 'LC_Send_L_prime', 'RTT_Challenge',
+            })
+
+        if section == "13.2":
+            # Authentication with repeaters: the RepeaterAuth phase was entered.
+            return bool(types & {
+                'RepeaterAuth_Send_ReceiverID_List',
+                'RepeaterAuth_Send_Ack',
+                'RepeaterAuth_Stream_Manage',
+                'RepeaterAuth_Stream_Ready',
+            })
+
+        if section == "13.3":
+            return 'RepeaterAuth_Stream_Manage' in types
+
+        # Unknown section: be conservative and treat as exercised so behavior is unchanged.
+        return True
+
     def validate_all_exchanges(self, analysis_result: HKEPAnalysisResult, verbose: bool = True, section: str = "13.2") -> Dict:
         """
         Validate HKEP section requirements for all exchanges
@@ -2193,7 +2283,12 @@ class HKEPDissector:
                     print(f"    Packet range: #{first_packet} - #{last_packet}")
                 print()
             self._incomplete_warning_shown = True
-        
+
+        # Number of complete exchanges available to validate. Used to distinguish a genuine
+        # PASS (a section was actually exercised) from a vacuous one (nothing to validate).
+        complete_count = sum(1 for ex in analysis_result.get_all_exchanges() if ex.is_complete)
+        no_evidence_reason = self.SECTION_NO_EVIDENCE_REASON.get(section, "section not exercised")
+
         validate_func = None
         section_name = ""
         if section == "12.6":
@@ -2223,8 +2318,19 @@ class HKEPDissector:
                 if session_key not in exchange_errors:
                     exchange_errors[session_key] = []
                 exchange_errors[session_key].append(error)
-            
-            if verbose and all_errors:
+
+            # Positive evidence for session caching: a session became valid, i.e. a Sender sent
+            # RepeaterAuth_Send_Ack in a complete exchange (§13.2.2). Without it there is nothing
+            # to validate the caching behavior against -> NOT VALIDATED rather than a vacuous PASS.
+            cache_applicable = sum(
+                1 for ex in analysis_result.get_all_exchanges()
+                if ex.is_complete and 'RepeaterAuth_Send_Ack' in self._exchange_message_types(ex)
+            )
+
+            # Info-severity items are informational and must not affect status (see _validation_status).
+            sc_blocking = [e for e in all_errors if e.get('severity') in ('error', 'warning')]
+
+            if verbose and sc_blocking:
                 print(f"\n{'='*80}")
                 print(f"HKEP Session Caching Validation Results")
                 print(f"{'='*80}")
@@ -2252,20 +2358,37 @@ class HKEPDissector:
                             print(f"      Note: {error['note']}")
                 
                 print(f"\n{'='*80}")
+            elif verbose and cache_applicable == 0:
+                reason = ("No complete HKEP exchanges were available to validate."
+                          if complete_count == 0
+                          else f"No HKEP exchange exercised session caching "
+                               f"({self.SECTION_NO_EVIDENCE_REASON['session_caching']}).")
+                print(f"\n{'='*80}")
+                print(f"HKEP Session Caching Validation: NOT VALIDATED (NO DATA)")
+                print(f"  {reason}")
+                print(f"{'='*80}")
             elif verbose:
                 print(f"\n{'='*80}")
                 print(f"HKEP Session Caching Validation: PASSED")
                 print(f"  All session caching requirements are satisfied:")
                 print(f"    - Sender session caching consistency met")
                 print(f"    - Receiver session reuse patterns met")
+                info_notes = [e for e in all_errors if e.get('severity') == 'info']
+                if info_notes:
+                    print(f"  ({len(info_notes)} informational note(s), not violations):")
+                    for e in info_notes:
+                        print(f"    [INFO] {e['description']}")
                 print(f"{'='*80}")
-            
+
             return {
                 'total_errors': sum(1 for e in all_errors if e['severity'] == 'error'),
                 'total_warnings': sum(1 for e in all_errors if e['severity'] == 'warning'),
                 'total_issues': len(all_errors),
                 'exchange_errors': exchange_errors,
-                'all_errors': all_errors
+                'all_errors': all_errors,
+                'status': self._validation_status(cache_applicable, all_errors),
+                'applicable_exchanges': cache_applicable,
+                'complete_exchanges': complete_count
             }
         else:
             return {
@@ -2273,21 +2396,37 @@ class HKEPDissector:
                 'total_warnings': 0,
                 'total_issues': 0,
                 'exchange_errors': {},
-                'all_errors': []
+                'all_errors': [],
+                'status': 'NO_DATA',
+                'applicable_exchanges': 0,
+                'complete_exchanges': complete_count
             }
-        
-        # Validate only complete exchanges
+
+        # Validate only complete exchanges that actually exercise this section.
+        # An exchange that never reaches the section's protocol activity carries no positive
+        # evidence for it, so it is skipped here and the section reports NOT VALIDATED below
+        # rather than a vacuous PASS. (Real violations on exercised exchanges are still raised.)
+        applicable_count = 0
         for exchange in analysis_result.get_all_exchanges():
             # Skip incomplete exchanges
             if not exchange.is_complete:
                 continue
-            
+
+            if not self._exchange_exercises_section(section, exchange):
+                continue
+
+            applicable_count += 1
             errors = validate_func(exchange)
             if errors:
                 exchange_errors[exchange.session_key] = errors
                 all_errors.extend(errors)
-        
-        if verbose and all_errors:
+
+        # Only error/warning severities affect a section's status. Info-severity items are
+        # informational annotations (e.g. "session becomes valid", "Null Topology") and must
+        # not flip a section away from PASSED; they are still displayed below for visibility.
+        blocking_errors = [e for e in all_errors if e.get('severity') in ('error', 'warning')]
+
+        if verbose and blocking_errors:
             print(f"\n{'='*80}")
             print(f"HKEP Section {section_name} Validation Results")
             print(f"{'='*80}")
@@ -2329,6 +2468,14 @@ class HKEPDissector:
                         print(f"      Note: {error['note']}")
             
             print(f"\n{'='*80}")
+        elif verbose and applicable_count == 0:
+            reason = ("No complete HKEP exchanges were available to validate."
+                      if complete_count == 0
+                      else f"No HKEP exchange exercised section {section_name} ({no_evidence_reason}).")
+            print(f"\n{'='*80}")
+            print(f"HKEP Section {section_name} Validation: NOT VALIDATED (NO DATA)")
+            print(f"  {reason}")
+            print(f"{'='*80}")
         elif verbose:
             print(f"\n{'='*80}")
             print(f"HKEP Section {section_name} Validation: PASSED")
@@ -2355,16 +2502,30 @@ class HKEPDissector:
                 print(f"    - streamCtr immutability requirements met")
                 print(f"    - k attribute bounds met")
                 print(f"    - Unique streamCtr count within limits")
+            # Informational notes do not affect PASS status, but keep them visible.
+            info_notes = sum(1 for e in all_errors if e.get('severity') == 'info')
+            if info_notes:
+                print(f"  ({info_notes} informational note(s), not violations):")
+                for session_key, errors in exchange_errors.items():
+                    sess_info = [e for e in errors if e.get('severity') == 'info']
+                    if not sess_info:
+                        continue
+                    print(f"    Exchange: {session_key}")
+                    for e in sess_info:
+                        print(f"      [INFO] {e['description']}")
             print(f"{'='*80}")
-        
+
         return {
             'total_errors': sum(1 for e in all_errors if e['severity'] == 'error'),
             'total_warnings': sum(1 for e in all_errors if e['severity'] == 'warning'),
             'total_issues': len(all_errors),
             'exchange_errors': exchange_errors,
-            'all_errors': all_errors
+            'all_errors': all_errors,
+            'status': self._validation_status(applicable_count, all_errors),
+            'applicable_exchanges': applicable_count,
+            'complete_exchanges': complete_count
         }
-    
+
     def _is_reconnect_exchange(self, exchange: HKEPExchange) -> bool:
         """
         Determine if this exchange is a reconnect scenario
@@ -4519,6 +4680,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_12_6['total_errors'],
                     'total_warnings': validation_results_12_6['total_warnings'],
                     'total_issues': validation_results_12_6['total_issues'],
+                    'status': validation_results_12_6.get('status'),
+                    'applicable_exchanges': validation_results_12_6.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_12_6.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_12_6['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
@@ -4543,6 +4707,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_12_7['total_errors'],
                     'total_warnings': validation_results_12_7['total_warnings'],
                     'total_issues': validation_results_12_7['total_issues'],
+                    'status': validation_results_12_7.get('status'),
+                    'applicable_exchanges': validation_results_12_7.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_12_7.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_12_7['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
@@ -4567,6 +4734,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_13_1['total_errors'],
                     'total_warnings': validation_results_13_1['total_warnings'],
                     'total_issues': validation_results_13_1['total_issues'],
+                    'status': validation_results_13_1.get('status'),
+                    'applicable_exchanges': validation_results_13_1.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_13_1.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_13_1['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
@@ -4591,6 +4761,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_13_2['total_errors'],
                     'total_warnings': validation_results_13_2['total_warnings'],
                     'total_issues': validation_results_13_2['total_issues'],
+                    'status': validation_results_13_2.get('status'),
+                    'applicable_exchanges': validation_results_13_2.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_13_2.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_13_2['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
@@ -4615,6 +4788,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_13_3['total_errors'],
                     'total_warnings': validation_results_13_3['total_warnings'],
                     'total_issues': validation_results_13_3['total_issues'],
+                    'status': validation_results_13_3.get('status'),
+                    'applicable_exchanges': validation_results_13_3.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_13_3.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_13_3['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
@@ -4639,6 +4815,9 @@ The --validate-session-caching option validates session caching consistency:
                     'total_errors': validation_results_session_caching['total_errors'],
                     'total_warnings': validation_results_session_caching['total_warnings'],
                     'total_issues': validation_results_session_caching['total_issues'],
+                    'status': validation_results_session_caching.get('status'),
+                    'applicable_exchanges': validation_results_session_caching.get('applicable_exchanges'),
+                    'complete_exchanges': validation_results_session_caching.get('complete_exchanges'),
                     'exchanges_with_errors': len(validation_results_session_caching['exchange_errors']),
                     'errors_by_exchange': {
                         session_key: [
