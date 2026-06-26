@@ -2961,12 +2961,12 @@ class HKEPDissector:
                 errors.append({
                     'type': 'null_topology_detected',
                     'severity': 'info',
-                    'description': f"RepeaterAuth_Send_ReceiverID_List (packet #{receiverid_msg.get('packet_number')}) contains Null Topology (DEVICE_COUNT=0, DEPTH=0). Receiver is making HKEP session inactive at Sender.",
+                    'description': f"RepeaterAuth_Send_ReceiverID_List (packet #{receiverid_msg.get('packet_number')}) contains Null Topology (DEVICE_COUNT=0, DEPTH=0). Receiver is requesting to make its HKEP session inactive (unsubscribing); inactivation is confirmed when the Receiver receives the RepeaterAuth_Send_Ack.",
                     'packet_number': receiverid_msg.get('packet_number'),
                     'timestamp': receiverid_msg.get('timestamp', 0),
-                    'expected': 'Null Topology indicates Receiver is unsubscribing from HDCP Content and making session inactive (per section 13.2.4)',
+                    'expected': 'Null Topology indicates Receiver is unsubscribing from HDCP Content; the Receiver must receive the RepeaterAuth_Send_Ack before treating its session inactive (per sections 13.2.1 and 13.2.4)',
                     'hkep_section': '13.2.4',
-                    'note': 'This is informational - session is transitioning to inactive state. Receiver will no longer be part of topology tree.'
+                    'note': 'Informational - inactivation is requested here and becomes effective once the Sender acknowledges it with RepeaterAuth_Send_Ack. Receiver will no longer be part of the topology tree.'
                 })
                 
                 # Check if Sender acknowledges the Null Topology with Send_Ack (session becomes INACTIVE)
@@ -3031,33 +3031,22 @@ class HKEPDissector:
                             })
         
         # 13.2.2: Session Validity Timing
-        # Per spec: "The HKEP session becomes valid at the instant the HDCP RTP v2.3 session becomes valid"
-        # HDCP RTP v2.3 session becomes valid when:
-        # 1. Receiver receives SKE_Send_Eks (initial authentication), OR
-        # 2. Sender sends RepeaterAuth_Send_Ack (subsequent exchange after Receiver sent ReceiverID_List), OR
-        # 3. Receiver sends RepeaterAuth_Stream_Ready (subsequent exchange after Sender sent Stream_Manage)
-        
+        # Per VSF TR-10-5:2026 section 13.2.2, an HKEP session becomes valid only after a FIRST
+        # successful exchange, marked by the RepeaterAuth_Send_Ack message -- when the Sender sends
+        # it and when the Receiver receives it. A subsequent (reconnect) exchange presupposes an
+        # already-valid session (section 13.2.3), so it does not (re)establish validity.
+
         # Find when session becomes valid
         session_valid_timestamp = None
         session_valid_packet = None
         session_valid_reason = None
-        
+
         # Track Send_Ack packets that respond to Null Topology (these make session INACTIVE, not valid)
         null_topology_ack_packets = set()
-        
+
         sorted_msgs = sorted(messages, key=lambda x: x.get('timestamp', 0))
-        
-        # Check for SKE_Send_Eks (initial authentication - session becomes valid for Receiver)
-        ske_send_eks_msg = next((m for m in sorted_msgs 
-                                 if m.get('hkep', {}).get('message_type') == 'SKE_Send_Eks' and
-                                    m.get('hkep', {}).get('direction') == 'Encoder->Decoder'), None)
-        
-        if ske_send_eks_msg:
-            session_valid_timestamp = ske_send_eks_msg.get('timestamp', 0)
-            session_valid_packet = ske_send_eks_msg.get('packet_number')
-            session_valid_reason = "SKE_Send_Eks received by Receiver (initial authentication)"
-        
-        # Check for RepeaterAuth_Send_Ack (subsequent exchange - session becomes valid for both)
+
+        # Check for RepeaterAuth_Send_Ack (session becomes valid for both)
         # IMPORTANT: Send_Ack after Null Topology does NOT make session valid - it acknowledges session becoming INACTIVE
         # STEP 1: First pass - identify ALL null topology acks before setting session validity
         send_ack_messages = [m for m in sorted_msgs 
@@ -3102,24 +3091,14 @@ class HKEPDissector:
             if session_valid_timestamp and send_ack_timestamp <= session_valid_timestamp:
                 continue
             
-            # This is a normal Send_Ack - session becomes valid
-            # Double check it's not in null topology acks (should never happen due to continue above)
-            if send_ack_packet not in null_topology_ack_packets:
+            # A session becomes valid only at the Send_Ack of a FIRST (non-subsequent) exchange,
+            # when the Sender sends it and the Receiver receives it (section 13.2.2). Subsequent
+            # (reconnect) exchanges presuppose an already-valid session, so they do not re-establish it.
+            if not is_reconnect and send_ack_packet not in null_topology_ack_packets:
                 session_valid_timestamp = send_ack_timestamp
                 session_valid_packet = send_ack_packet
-                session_valid_reason = "RepeaterAuth_Send_Ack sent by Sender (subsequent exchange)"
-        
-        # Check for RepeaterAuth_Stream_Ready (subsequent exchange - session becomes valid for both)
-        stream_ready_msg = next((m for m in sorted_msgs 
-                                 if m.get('hkep', {}).get('message_type') == 'RepeaterAuth_Stream_Ready' and
-                                    m.get('hkep', {}).get('direction') == 'Decoder->Encoder'), None)
-        
-        if stream_ready_msg and (not session_valid_timestamp or stream_ready_msg.get('timestamp', 0) > session_valid_timestamp):
-            # Session becomes valid when Receiver sends Stream_Ready (or revalidated)
-            session_valid_timestamp = stream_ready_msg.get('timestamp', 0)
-            session_valid_packet = stream_ready_msg.get('packet_number')
-            session_valid_reason = "RepeaterAuth_Stream_Ready sent by Receiver (subsequent exchange)"
-        
+                session_valid_reason = "RepeaterAuth_Send_Ack (sent by Sender / received by Receiver) - first successful exchange (per section 13.2.2)"
+
         # Log session validity information
         # BUT: Skip if:
         # 1. session_valid_packet is actually a Null Topology ack (session becoming INACTIVE, not valid)
@@ -3442,7 +3421,7 @@ class HKEPDissector:
                     errors.append({
                         'type': 'version_mismatch',
                         'severity': 'error',
-                        'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) has version 0x{preinit_version:02x}, but AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has version 0x{preinitstatus_version:02x}. Both sides shall use the same protocol version.",
+                        'description': f"AKE_PreInit (packet #{preinit_msg.get('packet_number')}) has version {preinit_version}, but AKE_PreInitStatus (packet #{preinitstatus_msg.get('packet_number')}) has version {preinitstatus_version}. Both sides shall use the same protocol version.",
                         'packet_number': preinitstatus_msg.get('packet_number'),
                         'timestamp': preinitstatus_msg.get('timestamp', 0),
                         'expected': 'Both client and server sides of TCP/IP connection shall use the same HKEP protocol version. Server shall match client version in AKE_PreInitStatus response (per section 12.4.1)',
@@ -3623,8 +3602,36 @@ class HKEPDissector:
                             'note': 'AKE_Stored_km messages indicate stored pairing information, which requires pairing slots to be available'
                         })
         
+        # 12.6.2: A statusOk reconnect must NOT re-authenticate.
+        # When the Receiver reconnects with restart/REAUTH_REQ=false and the Sender answers statusOk
+        # ("the HKEP session is valid and has not expired"), the Sender "shall restart an existing
+        # HDCPRTP v2.3 session at the Authentication with Repeaters stage" -- i.e. proceed to the
+        # subsequent RepeaterAuth exchange, NOT send AKE_Init. AKE_Init is reserved for the
+        # statusPairingExpired / statusSessionExpired branches. Deliberately NOT gated on the
+        # is_reconnect heuristic: that helper treats the presence of AKE_Init as "not a reconnect",
+        # which is exactly the violation this rule must catch.
+        if preinit_msg and preinitstatus_msg and restart_reauth_flag is False:
+            if preinitstatus_msg.get('hkep', {}).get('status') == 0:  # statusOk
+                preinitstatus_time = preinitstatus_msg.get('timestamp', 0)
+                ake_init_after = next(
+                    (m for m in sorted_messages
+                     if m.get('hkep', {}).get('message_type') == 'AKE_Init'
+                     and m.get('timestamp', 0) > preinitstatus_time),
+                    None
+                )
+                if ake_init_after:
+                    errors.append({
+                        'type': 'unexpected_ake_init_after_statusok_reconnect',
+                        'severity': 'error',
+                        'description': f"AKE_Init (packet #{ake_init_after.get('packet_number')}) was sent after AKE_PreInitStatus statusOk (packet #{preinitstatus_msg.get('packet_number')}) on a reconnect (restart/REAUTH_REQ=false). A valid, non-expired session shall be restarted at the Authentication with Repeaters stage, not re-authenticated.",
+                        'packet_number': ake_init_after.get('packet_number'),
+                        'timestamp': ake_init_after.get('timestamp', 0),
+                        'expected': 'When restart/REAUTH_REQ=false and AKE_PreInitStatus.status is statusOk, the Sender shall restart the existing session at the Authentication with Repeaters stage and shall not send AKE_Init (per section 12.6.2)',
+                        'hkep_section': '12.6.2'
+                    })
+
         # 12.6.3: With reconnect - restart/REAUTH_REQ should be false when reconnecting after session is valid
-        # Per spec: "A Receiver should reconnect to a Sender with the restart/REAUTH_REQ attribute 
+        # Per spec: "A Receiver should reconnect to a Sender with the restart/REAUTH_REQ attribute
         # of the AKE_PreInit message set to false after an HKEP session has become valid"
         # So reconnect per 12.6.3 specifically requires restart/REAUTH_REQ=false
         is_reconnect = self._is_reconnect_exchange(exchange)
