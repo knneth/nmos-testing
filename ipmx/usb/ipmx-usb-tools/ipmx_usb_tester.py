@@ -50,6 +50,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
 from typing import Optional
 
@@ -158,13 +159,28 @@ USB_REQ_SET_CONFIGURATION = 0x09
 USB_REQ_SET_IDLE         = 0x0A
 USB_REQ_SET_PROTOCOL     = 0x0B
 
-USB_DT_DEVICE  = 0x01
-USB_DT_CONFIG  = 0x02
-USB_DT_STRING  = 0x03
-USB_DT_HID     = 0x21
-USB_DT_REPORT  = 0x22
+USB_DT_DEVICE    = 0x01
+USB_DT_CONFIG    = 0x02
+USB_DT_STRING    = 0x03
+USB_DT_INTERFACE = 0x04
+USB_DT_ENDPOINT  = 0x05
+USB_DT_HID       = 0x21
+USB_DT_REPORT    = 0x22
 
 USB_CLASS_HID  = 0x03
+
+
+class HidBootProtocol(IntEnum):
+    """HID boot-interface protocol (USB HID 1.11 §4.3, bInterfaceProtocol).
+
+    Valid only when bInterfaceSubClass == 1 (Boot Interface Subclass). This is
+    the authoritative discriminator between a keyboard and a mouse; the endpoint
+    packet size is not (a boot mouse may advertise wMaxPacketSize > 3 to leave
+    room for an optional wheel byte it does not always send).
+    """
+    NONE     = 0   # no specific boot protocol
+    KEYBOARD = 1
+    MOUSE    = 2
 
 
 def _get_descriptor_req(dtype: int, index: int, length: int,
@@ -202,18 +218,33 @@ class EndpointInfo:
     transfer_type: int # 0=ctrl 1=iso 2=bulk 3=interrupt
     interval: int      # bInterval (ms for FS, 125 µs units for HS)
     max_packet: int
+    # Owning interface descriptor (the one this endpoint follows in the config
+    # blob).  bInterfaceProtocol is the authoritative HID device-type selector.
+    iface_class: int    = 0   # bInterfaceClass
+    iface_subclass: int = 0   # bInterfaceSubClass (1 = Boot)
+    iface_protocol: int = 0   # bInterfaceProtocol (see HidBootProtocol)
 
 
 def _parse_config_descriptor(data: bytes) -> list[EndpointInfo]:
-    """Walk a full configuration descriptor blob and return all endpoint descriptors."""
+    """Walk a full configuration descriptor blob and return all endpoint descriptors.
+
+    Endpoint descriptors are tagged with the class/subclass/protocol of the
+    interface descriptor that precedes them, so a HID interrupt endpoint can be
+    classified as keyboard vs mouse from its boot-interface protocol.
+    """
     endpoints: list[EndpointInfo] = []
+    cur_class = cur_subclass = cur_protocol = 0
     i = 0
     while i + 2 <= len(data):
         bLength = data[i]
         bType   = data[i + 1]
         if bLength < 2:
             break
-        if bType == 0x05 and bLength >= 7:  # Endpoint descriptor
+        if bType == USB_DT_INTERFACE and bLength >= 9:  # Interface descriptor
+            cur_class    = data[i + 5]
+            cur_subclass = data[i + 6]
+            cur_protocol = data[i + 7]
+        elif bType == USB_DT_ENDPOINT and bLength >= 7:  # Endpoint descriptor
             addr     = data[i + 2]
             attrs    = data[i + 3]
             maxpkt   = struct.unpack_from('<H', data, i + 4)[0] & 0x07FF
@@ -225,6 +256,9 @@ def _parse_config_descriptor(data: bytes) -> list[EndpointInfo]:
                 transfer_type= attrs & 0x03,
                 interval     = interval,
                 max_packet   = maxpkt,
+                iface_class    = cur_class,
+                iface_subclass = cur_subclass,
+                iface_protocol = cur_protocol,
             ))
         i += bLength
     return endpoints
@@ -1774,7 +1808,7 @@ class DataChannelHandler:
                 if td != self._prev_hid:
                     self._prev_hid = td
                     if any(td):
-                        self._decode_hid(td, ep.max_packet)
+                        self._decode_hid(td, ep)
 
             # Pace polling
             time.sleep(interval)
@@ -1800,7 +1834,27 @@ class DataChannelHandler:
 
     # ------------------------------------------------------------------
 
-    def _decode_hid(self, data: bytes, max_pkt: int) -> None:
+    def _classify_hid(self, ep: EndpointInfo) -> HidBootProtocol:
+        """Decide whether *ep* carries keyboard or mouse boot reports.
+
+        The HID boot-interface protocol (bInterfaceProtocol) is authoritative
+        when the interface is a boot device.  Endpoint packet size is only a
+        last-resort fallback: a boot mouse may advertise wMaxPacketSize > 3 to
+        leave room for an optional wheel byte, so size alone misclassifies it.
+        """
+        if ep.iface_class == USB_CLASS_HID and ep.iface_subclass == 1:
+            if ep.iface_protocol == HidBootProtocol.KEYBOARD:
+                return HidBootProtocol.KEYBOARD
+            if ep.iface_protocol == HidBootProtocol.MOUSE:
+                return HidBootProtocol.MOUSE
+        # Fallback heuristic for non-boot or unlabelled interfaces.
+        if ep.max_packet == 8:
+            return HidBootProtocol.KEYBOARD
+        if ep.max_packet <= 4:
+            return HidBootProtocol.MOUSE
+        return HidBootProtocol.NONE
+
+    def _decode_hid(self, data: bytes, ep: EndpointInfo) -> None:
         """Decode a HID boot-protocol report and print human-readable output.
 
         Keyboard: shows the actual character(s) typed (using the standard HID
@@ -1808,69 +1862,76 @@ class DataChannelHandler:
         Mouse: shows button presses and movement direction as an ASCII arrow.
         """
         sess = self._session
+        kind = self._classify_hid(ep)
 
-        if max_pkt == 8 and len(data) >= 3:
-            # ---- Keyboard boot protocol: [mods, reserved, key0..key5] ----
-            mods = data[0]
-            keys = [k for k in data[2:min(8, len(data))] if k != 0]
-
-            # Decode each pressed key to its character
-            chars = [_hid_key_to_char(k, mods) for k in keys]
-            char_str = ''.join(chars) if chars else ''
-
-            # Build modifier label (only non-shift mods — shift is folded into char)
-            mod_parts = []
-            if mods & 0x01: mod_parts.append('Ctrl')
-            if mods & 0x04: mod_parts.append('Alt')
-            if mods & 0x08: mod_parts.append('Win')
-            if mods & 0x10: mod_parts.append('R-Ctrl')
-            if mods & 0x40: mod_parts.append('AltGr')
-            if mods & 0x80: mod_parts.append('R-Win')
-            if mods & 0x02: mod_parts.append('Shift')   # show if no printable char
-            if mods & 0x20: mod_parts.append('R-Shift')
-
-            if char_str and mod_parts:
-                non_shift_mods = [m for m in mod_parts if 'Shift' not in m]
-                prefix = '+'.join(non_shift_mods) + '+' if non_shift_mods else ''
-                sess.hid(f"  ⌨  {prefix}{char_str!r}")
-            elif char_str:
-                sess.hid(f"  ⌨  {char_str!r}")
-            elif mods:
-                sess.hid(f"  ⌨  <{'+'.join(mod_parts)}>")
-            # all-zero report = key release, skip
-
-        elif max_pkt <= 4 and len(data) >= 3:
-            # ---- Mouse boot protocol: [buttons, dx, dy, wheel?] ----
-            btns  = data[0]
-            dx    = struct.unpack_from('b', data, 1)[0]
-            dy    = struct.unpack_from('b', data, 2)[0]
-            wheel = struct.unpack_from('b', data, 3)[0] if len(data) >= 4 else 0
-
-            parts = []
-
-            # Movement arrow
-            if dx != 0 or dy != 0:
-                horiz = ('→' * min(abs(dx), 5) if dx > 0 else '←' * min(abs(dx), 5)) if dx else ''
-                vert  = ('↓' * min(abs(dy), 5) if dy > 0 else '↑' * min(abs(dy), 5)) if dy else ''
-                parts.append(f"{horiz}{vert} ({dx:+d},{dy:+d})")
-
-            # Wheel
-            if wheel > 0:
-                parts.append(f"scroll↑{wheel}")
-            elif wheel < 0:
-                parts.append(f"scroll↓{abs(wheel)}")
-
-            # Buttons
-            btn_names = {0: 'Left', 1: 'Right', 2: 'Middle'}
-            pressed = [btn_names.get(i, f'B{i+1}') for i in range(8) if btns & (1 << i)]
-            if pressed:
-                parts.append(f"[{' '.join(pressed)}]")
-
-            if parts:
-                sess.hid(f"  🖱  {' '.join(parts)}")
-
+        if kind == HidBootProtocol.KEYBOARD and len(data) >= 3:
+            self._decode_keyboard_report(data)
+        elif kind == HidBootProtocol.MOUSE and len(data) >= 3:
+            self._decode_mouse_report(data)
         else:
-            sess.hid(f"  HID raw ({max_pkt}B): {data.hex()}")
+            sess.hid(f"  HID raw ({ep.max_packet}B): {data.hex()}")
+
+    def _decode_keyboard_report(self, data: bytes) -> None:
+        """Render a keyboard boot report: [mods, reserved, key0..key5]."""
+        sess = self._session
+        mods = data[0]
+        keys = [k for k in data[2:min(8, len(data))] if k != 0]
+
+        # Decode each pressed key to its character
+        chars = [_hid_key_to_char(k, mods) for k in keys]
+        char_str = ''.join(chars) if chars else ''
+
+        # Build modifier label (only non-shift mods — shift is folded into char)
+        mod_parts = []
+        if mods & 0x01: mod_parts.append('Ctrl')
+        if mods & 0x04: mod_parts.append('Alt')
+        if mods & 0x08: mod_parts.append('Win')
+        if mods & 0x10: mod_parts.append('R-Ctrl')
+        if mods & 0x40: mod_parts.append('AltGr')
+        if mods & 0x80: mod_parts.append('R-Win')
+        if mods & 0x02: mod_parts.append('Shift')   # show if no printable char
+        if mods & 0x20: mod_parts.append('R-Shift')
+
+        if char_str and mod_parts:
+            non_shift_mods = [m for m in mod_parts if 'Shift' not in m]
+            prefix = '+'.join(non_shift_mods) + '+' if non_shift_mods else ''
+            sess.hid(f"  ⌨  {prefix}{char_str!r}")
+        elif char_str:
+            sess.hid(f"  ⌨  {char_str!r}")
+        elif mods:
+            sess.hid(f"  ⌨  <{'+'.join(mod_parts)}>")
+        # all-zero report = key release, skip
+
+    def _decode_mouse_report(self, data: bytes) -> None:
+        """Render a mouse boot report: [buttons, dx, dy, wheel?]."""
+        sess = self._session
+        btns  = data[0]
+        dx    = struct.unpack_from('b', data, 1)[0]
+        dy    = struct.unpack_from('b', data, 2)[0]
+        wheel = struct.unpack_from('b', data, 3)[0] if len(data) >= 4 else 0
+
+        parts = []
+
+        # Movement arrow
+        if dx != 0 or dy != 0:
+            horiz = ('→' * min(abs(dx), 5) if dx > 0 else '←' * min(abs(dx), 5)) if dx else ''
+            vert  = ('↓' * min(abs(dy), 5) if dy > 0 else '↑' * min(abs(dy), 5)) if dy else ''
+            parts.append(f"{horiz}{vert} ({dx:+d},{dy:+d})")
+
+        # Wheel
+        if wheel > 0:
+            parts.append(f"scroll↑{wheel}")
+        elif wheel < 0:
+            parts.append(f"scroll↓{abs(wheel)}")
+
+        # Buttons
+        btn_names = {0: 'Left', 1: 'Right', 2: 'Middle'}
+        pressed = [btn_names.get(i, f'B{i+1}') for i in range(8) if btns & (1 << i)]
+        if pressed:
+            parts.append(f"[{' '.join(pressed)}]")
+
+        if parts:
+            sess.hid(f"  🖱  {' '.join(parts)}")
 
     # ------------------------------------------------------------------
 
