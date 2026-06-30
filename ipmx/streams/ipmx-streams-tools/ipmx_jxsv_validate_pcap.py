@@ -45,6 +45,7 @@ from ipmx_validate_common import (
     check_sr_rtp_timestamp_nominal,
     compute_nominal_period,
     cross_validate_exactframerate,
+    cross_validate_video_params,
     extract_exact_framerate_from_sr,
     filter_capture_boundary_orphan_srs,
     interval_variation_in_window,
@@ -611,6 +612,13 @@ class JXSVValidationContext:
     encrypted: bool = False
     codestream: JXSVCodestreamInfo | None = None
     tdc: bool = False  # validate IPMX-JPEG-XS-TDC profile mode (--tdc)
+    # Authoritative expected values from the CLI (--width/--height/--sampling/
+    # --bit-depth), cross-checked against the MIB (same mechanism as
+    # --exactframerate).
+    cli_width: int | None = None
+    cli_height: int | None = None
+    cli_sampling: str | None = None
+    cli_bit_depth: int | None = None
 
 
 def _frame_from_report(d: dict[str, Any]) -> JXSVFrameInfo:
@@ -751,6 +759,10 @@ def build_context(args: argparse.Namespace) -> JXSVValidationContext:
         encrypted=encrypted,
         codestream=cs_info,
         tdc=bool(getattr(args, "tdc", False)),
+        cli_width=args.width,
+        cli_height=args.height,
+        cli_sampling=args.sampling,
+        cli_bit_depth=args.bit_depth,
     )
 
 
@@ -2258,6 +2270,9 @@ def build_requirements(ctx: JXSVValidationContext) -> list[Requirement]:
     add("TR-10-1-FR-XVAL", "shall",
         "CLI --exactframerate SHALL match MIB rate_numerator/rate_denominator when both present.",
         lambda c=ctx: cross_validate_exactframerate(c.exact_framerate, c.sender_reports))
+    add("TR-10-1-VP-XVAL", "shall",
+        "CLI --width/--height/--sampling/--bit-depth SHALL match MIB video parameters when both present.",
+        lambda c=ctx: cross_validate_video_params(c.cli_width, c.cli_height, c.cli_sampling, c.cli_bit_depth, c.sender_reports))
 
     # --- TR-10-9: Frame-to-frame timing (applicable to CBR compressed) ---
     add("TR-10-9-11.2a", "shall",
@@ -2514,6 +2529,17 @@ def main() -> int:
         type=str,
         help="Exact framerate as integer or num/den (e.g. 60, 60000/1001)",
     )
+    parser.add_argument("--width", type=int, help="Expected video width in pixels")
+    parser.add_argument("--height", type=int, help="Expected video height in pixels")
+    parser.add_argument("--sampling", type=str, help="Expected sampling (e.g. YCbCr-4:2:2, RGB)")
+    parser.add_argument("--bit-depth", type=int, help="Expected bit depth (e.g. 8, 10, 12)")
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        help="Stream descriptor (streams/cfg/*.cfg, by path or bare name) to seed "
+             "expected-value flags (--exactframerate/--width/--height/--sampling/"
+             "--bit-depth); explicit flags on the command line override the cfg",
+    )
     parser.add_argument(
         "--cmax",
         action="store_true",
@@ -2530,6 +2556,14 @@ def main() -> int:
         help="Stream uses Privacy Encryption Protocol (PEP) encryption",
     )
     args = parser.parse_args()
+
+    if args.cfg:
+        from ipmx_validate_common import (
+            apply_video_cfg,
+            parse_cfg_file,
+            resolve_cfg_path,
+        )
+        apply_video_cfg(args, parse_cfg_file(resolve_cfg_path(args.cfg)))
 
     if not args.pcap.exists():
         raise SystemExit(f"{args.pcap} does not exist")

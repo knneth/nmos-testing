@@ -2109,7 +2109,22 @@ def main() -> int:
     parser.add_argument("--pass-report", action="store_true", help="Show only passing requirements")
     parser.add_argument("--fail-report", action="store_true", help="Show only failing requirements")
     parser.add_argument("--cannot-test-report", action="store_true", help="Show only requirements that cannot be tested")
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        help="Stream descriptor (streams/cfg/*.cfg, by path or bare name) to seed "
+             "expected-value flags (--sample-rate/--nchan/--ptime/--sample-size); "
+             "explicit flags on the command line override the cfg",
+    )
     args = parser.parse_args()
+
+    if args.cfg:
+        from ipmx_validate_common import (
+            apply_audio_cfg,
+            parse_cfg_file,
+            resolve_cfg_path,
+        )
+        apply_audio_cfg(args, parse_cfg_file(resolve_cfg_path(args.cfg)), parse_ptime_arg)
 
     ctx = build_context(args)
 

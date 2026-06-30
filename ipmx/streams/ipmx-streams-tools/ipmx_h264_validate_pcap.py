@@ -1616,7 +1616,22 @@ def main() -> int:
         action="store_true",
         help="Accept superset profiles (e.g. High 4:2:2 includes High 4:2:0 capability)",
     )
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        help="Stream descriptor (streams/cfg/*.cfg, by path or bare name) to seed "
+             "expected-value flags (--exactframerate/--width/--height/--sampling/"
+             "--bit-depth); explicit flags on the command line override the cfg",
+    )
     args = parser.parse_args()
+
+    if args.cfg:
+        from ipmx_validate_common import (
+            apply_video_cfg,
+            parse_cfg_file,
+            resolve_cfg_path,
+        )
+        apply_video_cfg(args, parse_cfg_file(resolve_cfg_path(args.cfg)), ycbcr_only=True)
 
     if not args.pcap.exists():
         raise SystemExit(f"{args.pcap} does not exist")

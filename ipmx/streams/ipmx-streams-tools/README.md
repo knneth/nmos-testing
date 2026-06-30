@@ -111,6 +111,48 @@ python3 ipmx_h265_validate_pcap.py capture.pcap \
 For encrypted captures, add `--hkep` and/or `--pep` to enable the
 encryption-validation requirement family (`ENC-01`..`ENC-14`).
 
+## Stream descriptor presets (`--cfg`)
+
+Every validator accepts `--cfg <file>` to seed the per-stream
+expected-value flags from a descriptor in [`cfg/`](cfg/) instead of typing
+them one by one. The argument takes a path or a bare name resolved against
+`cfg/` (e.g. `--cfg Test1080p59YUVPTP`). A cfg value only fills a flag that is
+still unset — an explicit flag on the command line always wins. `--cfg` never
+sets policy flags (`--cmax`, `--hrd-timing`, `--hkep`, `--pep`) or `--sdp`;
+keep passing those explicitly.
+
+The cfg files are INI-style `key=value`. Fields map to flags as follows:
+
+| cfg field | flag(s) set | validators |
+|-----------|-------------|------------|
+| `exactframerate` | `--exactframerate` | jxsv, raw, h264, h265 |
+| `width` / `height` | `--width` / `--height` | jxsv, raw, h264, h265 |
+| `sampling` | `--sampling` | jxsv, raw, h264, h265 |
+| `depth` | `--bit-depth` | jxsv, raw, h264, h265 |
+| `rtpclock` | `--sample-rate` | pcm, am824 |
+| `samplesize` (channel count) | `--nchan` | pcm, am824 |
+| `samplefmt` (L16/L20/L24) | `--bit-depth` + `--sample-size` | pcm (both), am824 (`--sample-size`) |
+| `ptime` | `--ptime` | pcm, am824 |
+
+`type`/`PTP` are not flags (`type` is a media sanity-check). For H.264/H.265 a
+non-YCbCr `sampling` (e.g. `RGB`) is skipped with a warning, since those codecs
+carry YCbCr only. `--measured-sample-rate` is a measured value and is not set
+from a cfg.
+
+```bash
+# H.265, parameters from a descriptor; SDP and policy flags still explicit
+python3 ipmx_h265_validate_pcap.py capture.pcap \
+    --cfg Test1080p59YUVPTP --sdp transport.sdp --cmax --hrd-timing
+
+# PCM audio
+python3 ipmx_pcm_validate_pcap.py capture.pcap --cfg TestL24-2 --sdp transport.sdp
+```
+
+For `jxsv` and `raw`, `--width/--height/--sampling/--bit-depth` are
+authoritative expected values cross-checked against the RTCP Sender-Report MIB
+(`TR-10-1-VP-XVAL`), behaving exactly like `--exactframerate` — untestable when
+omitted, exact-match-or-fail when supplied.
+
 ## Validation Surface
 
 Every check is tagged with the normative requirement ID. The major

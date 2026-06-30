@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import re
 import shutil
+import sys
 import tempfile
 import subprocess
 from dataclasses import dataclass, field
@@ -1844,3 +1845,120 @@ def summarize_results(results: list[RequirementResult]) -> str:
     passed = sum(1 for res in results if res.passed)
     failed = total - passed
     return f"{passed}/{total} passed, {failed} failed"
+
+
+# ---------------------------------------------------------------------------
+# CFG transport-descriptor parsing (streams/cfg/*.cfg)
+# ---------------------------------------------------------------------------
+#
+# The streams/cfg/*.cfg files are simple INI-style key=value descriptors of a
+# single test stream.  The --cfg option on each validator loads one of these
+# and seeds the matching expected-value arguments so they need not be typed by
+# hand.  A cfg value only fills an argument still unset after argparse — an
+# explicit CLI flag always wins.
+
+CFG_DIR = Path(__file__).resolve().parent / "cfg"
+
+
+def parse_cfg_file(path: Path) -> dict[str, str]:
+    """Parse an INI-style ``key=value`` cfg file into a lowercase-keyed dict.
+
+    Blank lines and comment lines (``#``, ``;``, ``//``) are skipped.
+    """
+    cfg: dict[str, str] = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith(("#", ";", "//")):
+            continue
+        if "=" in raw:
+            key, value = raw.split("=", 1)
+            cfg[key.strip().lower()] = value.strip()
+    return cfg
+
+
+def resolve_cfg_path(value: str) -> Path:
+    """Resolve a --cfg argument to a file.
+
+    Accepts a real path, or a bare name resolved against ``streams/cfg/`` (with
+    or without the ``.cfg`` suffix).
+    """
+    direct = Path(value)
+    if direct.is_file():
+        return direct
+    for candidate in (CFG_DIR / value, CFG_DIR / f"{value}.cfg"):
+        if candidate.is_file():
+            return candidate
+    raise SystemExit(f"cfg file not found: {value}")
+
+
+def require_cfg_type(cfg: dict[str, str], expected: str) -> None:
+    """Raise SystemExit if the cfg ``type`` field is present and not ``expected``."""
+    actual = cfg.get("type")
+    if actual is not None and actual != expected:
+        raise SystemExit(
+            f"cfg type={actual!r} does not match this validator (expected {expected!r})"
+        )
+
+
+def cfg_set_default(args: Any, attr: str, value: Any) -> None:
+    """Set ``args.attr = value`` only if that argument exists and is still unset.
+
+    This guarantees an explicit CLI flag (already non-None after argparse) is
+    never overwritten by a cfg value.
+    """
+    if value is None:
+        return
+    if hasattr(args, attr) and getattr(args, attr) is None:
+        setattr(args, attr, value)
+
+
+def apply_video_cfg(args: Any, cfg: dict[str, str], *, ycbcr_only: bool = False) -> None:
+    """Seed video expected-value args from a parsed cfg dict.
+
+    Only arguments that exist on ``args`` and are still unset are filled.  For
+    YCbCr-only codecs (H.264/H.265) a non-YCbCr sampling (e.g. RGB) is skipped
+    with a warning rather than applied, since it cannot match the codec.
+    """
+    require_cfg_type(cfg, "video")
+    if "exactframerate" in cfg:
+        cfg_set_default(args, "exactframerate", cfg["exactframerate"])
+    if "width" in cfg:
+        cfg_set_default(args, "width", int(cfg["width"]))
+    if "height" in cfg:
+        cfg_set_default(args, "height", int(cfg["height"]))
+    if "depth" in cfg:
+        cfg_set_default(args, "bit_depth", int(cfg["depth"]))
+    if "sampling" in cfg and hasattr(args, "sampling"):
+        sampling = cfg["sampling"]
+        if ycbcr_only and not sampling.startswith("YCbCr"):
+            print(
+                f"warning: cfg sampling={sampling!r} is not applicable to this "
+                f"YCbCr-only codec; --sampling left unset",
+                file=sys.stderr,
+            )
+        else:
+            cfg_set_default(args, "sampling", sampling)
+
+
+def apply_audio_cfg(args: Any, cfg: dict[str, str], ptime_parser: Any) -> None:
+    """Seed audio expected-value args from a parsed cfg dict.
+
+    ``rtpclock`` → ``--sample-rate``; ``samplesize`` is the channel count (cfg
+    convention) → ``--nchan``; ``ptime`` → ``--ptime`` (parsed by the caller's
+    ``ptime_parser``); ``samplefmt`` (L16/L20/L24) → both ``--bit-depth`` (PCM
+    payload width, where that flag exists) and ``--sample-size`` (RTCP SR audio
+    MIB value).  ``--measured-sample-rate`` is a measured value and is not set.
+    """
+    from ipmx_pcm import bit_depth_from_encoding
+
+    require_cfg_type(cfg, "audio")
+    if "rtpclock" in cfg:
+        cfg_set_default(args, "sample_rate", int(cfg["rtpclock"]))
+    if "samplesize" in cfg:
+        cfg_set_default(args, "nchan", int(cfg["samplesize"]))
+    if "ptime" in cfg:
+        cfg_set_default(args, "ptime", ptime_parser(cfg["ptime"]))
+    if "samplefmt" in cfg:
+        depth = bit_depth_from_encoding(cfg["samplefmt"])
+        cfg_set_default(args, "bit_depth", depth)
+        cfg_set_default(args, "sample_size", depth)
