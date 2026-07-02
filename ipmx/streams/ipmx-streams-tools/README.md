@@ -153,6 +153,43 @@ authoritative expected values cross-checked against the RTCP Sender-Report MIB
 (`TR-10-1-VP-XVAL`), behaving exactly like `--exactframerate` — untestable when
 omitted, exact-match-or-fail when supplied.
 
+## Profile-mode switches
+
+Some requirement families apply only when a specific profile mode is under test.
+These are opt-in, authoritative switches — the mode's requirements are only
+checked (and only listed by `--list-requirements`) when the switch is given:
+
+| Validator | Switch | Enables (in place of the base-profile requirements) |
+|-----------|--------|---------|
+| `jxsv` | `--tdc` | IPMX-JPEG-XS-TDC profile-mode requirements (`TR-10-15a` TDC), instead of the base High444.12 profile requirements |
+| `h265` | `--444` | IPMX HEVC 4:4:4 Profile Mode requirements (`TR-10-15b-131..134`), instead of the base `TR-10-15b-123`/`126` Main/Main10 4:2:0 requirements |
+
+A single capture exhibits one profile, so the base profile and the profile mode
+are validated from **separate captures**: run **without** the switch to validate
+the base profile, and **with** it to validate the mode. Each mode's "shall also
+be compliant with the base profile" requirement is untestable from one capture
+and is reported as such (validate the base leg from the without-switch run).
+
+## Listing requirements (`--list-requirements`)
+
+Every validator accepts `--list-requirements` to print its full requirement
+catalogue (ID, level, text, grouped by SHALL/SHOULD/INFO) and exit, without
+needing a PCAP. The list reflects the profile-mode switches above — e.g.
+`ipmx_h265_validate_pcap.py --444 --list-requirements` includes the 4:4:4
+Profile Mode requirements, and `--list-requirements` alone omits them.
+
+Rows that can never be tested from a PCAP (receiver / NMOS / decoder
+capabilities, and similar sender declarations) are marked **`NA`**, and the
+header reports the split, e.g. `70 requirements (53 testable, 17 NA)`. An
+unmarked row has a real check that yields PASS / FAIL / CANNOT_TEST at run time
+depending on the capture. (`NA` is the `lambda _: untestable(...)` sentinel in
+the requirement tables.)
+
+```bash
+python3 ipmx_h265_validate_pcap.py --list-requirements
+python3 ipmx_jxsv_validate_pcap.py --tdc --list-requirements
+```
+
 ## Validation Surface
 
 Every check is tagged with the normative requirement ID. The major

@@ -1393,7 +1393,8 @@ def _run_cmax_check(ctx: RawValidationContext) -> list[RequirementResult]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pcap", type=Path, help="PCAP file containing raw video RTP/RTCP")
+    parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing raw video RTP/RTCP")
+    parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")
     parser.add_argument("--port", type=int, help="RTP destination port (auto-detected if omitted)")
     parser.add_argument("--rtcp-port", type=int, help="RTCP destination port (default: RTP port + 1)")
     parser.add_argument("--ssrc", type=lambda x: int(x, 0), help="SSRC (decimal or 0x hex; auto-detected if omitted)")
@@ -1442,6 +1443,14 @@ def main() -> int:
         help="Stream uses Privacy Encryption Protocol (PEP) encryption",
     )
     args = parser.parse_args()
+
+    if args.list_requirements:
+        from ipmx_validate_common import print_requirements_list
+        print_requirements_list(Path(__file__).name, build_requirements(None))
+        return 0
+
+    if args.pcap is None:
+        parser.error("the pcap argument is required unless --list-requirements is used")
 
     if args.cfg:
         from ipmx_validate_common import (

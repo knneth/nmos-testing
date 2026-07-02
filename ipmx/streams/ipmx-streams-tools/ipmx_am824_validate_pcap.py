@@ -2082,7 +2082,8 @@ def print_results(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pcap", type=Path, help="PCAP file containing AM824 RTP")
+    parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing AM824 RTP")
+    parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")
     parser.add_argument("--port", type=int, help="RTP destination port (auto-detected if omitted)")
     parser.add_argument("--ssrc", type=lambda value: int(value, 0), help="Expected SSRC (decimal or 0x hex)")
     parser.add_argument("--dst-ip", dest="dst_ip", help="Expected destination IP address")
@@ -2117,6 +2118,14 @@ def main() -> int:
              "explicit flags on the command line override the cfg",
     )
     args = parser.parse_args()
+
+    if args.list_requirements:
+        from ipmx_validate_common import print_requirements_list
+        print_requirements_list(Path(__file__).name, build_requirements())
+        return 0
+
+    if args.pcap is None:
+        parser.error("the pcap argument is required unless --list-requirements is used")
 
     if args.cfg:
         from ipmx_validate_common import (

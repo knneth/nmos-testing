@@ -1322,7 +1322,7 @@ def build_requirements(ctx: ValidationContext) -> list[Requirement]:
     add("TR-10-9-11.2c", "shall", "For a Baseband IPMX Sender the Frame-to-Frame Interval shall correspond to the timing of their baseband input signal.", lambda _: untestable("Baseband input not observable"))
     add("TR-10-9-11.2d", "shall", "For IPMX Senders not based on the conversion of a baseband signal, the Frame-to-Frame interval shall correspond to the nominal frame rate of the media signal.", lambda _: untestable("Sender type not observable"))
     add("TR-10-15c-97", "shall", "A UDP/IP packet shall not contain more than one VCL NAL Unit.", lambda c=ctx: check_packet_vcl_limit(c))
-    add("TR-10-15c-99", "shall", "H.264 coded video shall be transmitted and decoded using the HRD transmitter and decoder schedules.", lambda c=ctx: untestable("HRD presence verified by TR-10-15c-110; schedule conformance not testable from PCAP"))
+    add("TR-10-15c-99", "shall", "H.264 coded video shall be transmitted and decoded using the HRD transmitter and decoder schedules.", lambda _: untestable("HRD presence verified by TR-10-15c-110; schedule conformance not testable from PCAP"))
     add("TR-10-1-MIB-SIG", "shall", "MIB baseband signal parameters shall be internally consistent (htotal >= width, vtotal >= height, pixclk = htotal*vtotal*fps).", lambda c=ctx: check_mib_signal_sanity(c))
     add("TR-10-15c-101", "shall", "Traffic shaping mode shall be set to TP=2110TPW and explicitly declared in the SDP fmtp attribute.", lambda c=ctx: check_sdp_tp_mode_h264(c))
     add("TR-10-15c-103", "shall", "Buffering Period SEI messages shall be provided at each recovery point.", lambda _: untestable("SEI recovery point details not parsed"))
@@ -1528,7 +1528,8 @@ def _run_cmax_check(ctx: ValidationContext) -> list[RequirementResult]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pcap", type=Path, help="PCAP file containing RTP/RTCP")
+    parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing RTP/RTCP")
+    parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")
     parser.add_argument("--port", type=int, help="Filter RTP packets by UDP port")
     parser.add_argument("--rtcp-port", type=int, help="Filter RTCP packets by UDP port")
     parser.add_argument("--frames", type=int, default=5, help="Frames to sample with ffmpeg")
@@ -1624,6 +1625,14 @@ def main() -> int:
              "--bit-depth); explicit flags on the command line override the cfg",
     )
     args = parser.parse_args()
+
+    if args.list_requirements:
+        from ipmx_validate_common import print_requirements_list
+        print_requirements_list(Path(__file__).name, build_requirements(None))
+        return 0
+
+    if args.pcap is None:
+        parser.error("the pcap argument is required unless --list-requirements is used")
 
     if args.cfg:
         from ipmx_validate_common import (

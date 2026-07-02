@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import re
 import shutil
@@ -201,6 +202,7 @@ class ValidationContext:
     stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None" = None
     encrypted: bool = False
     allow_superset_profile: bool = False
+    is_444: bool = False  # IPMX HEVC 4:4:4 Profile Mode under test (h265 --444)
 
 
 @dataclass
@@ -1962,3 +1964,50 @@ def apply_audio_cfg(args: Any, cfg: dict[str, str], ptime_parser: Any) -> None:
         depth = bit_depth_from_encoding(cfg["samplefmt"])
         cfg_set_default(args, "bit_depth", depth)
         cfg_set_default(args, "sample_size", depth)
+
+
+def requirement_is_untestable_by_design(check: Any) -> bool:
+    """True if a requirement can never be tested from a PCAP.
+
+    Such requirements are registered with the ``lambda _: untestable(...)``
+    sentinel — a single parameter named ``_`` (the capture is ignored). Real
+    checks capture the context as ``lambda c=ctx: ...`` (parameter ``c`` with a
+    default), so they are distinguishable by signature without being executed.
+    """
+    try:
+        params = list(inspect.signature(check).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return (
+        len(params) == 1
+        and params[0].name == "_"
+        and params[0].default is inspect.Parameter.empty
+    )
+
+
+def print_requirements_list(source: str, reqs: list[Requirement]) -> None:
+    """Print the requirement catalogue grouped by level for --list-requirements.
+
+    Each row is prefixed with ``NA`` when the requirement is untestable by design
+    (never observable from a PCAP — e.g. receiver/NMOS/decoder capabilities);
+    otherwise the row has a real check that yields PASS/FAIL/CANNOT_TEST at run
+    time depending on the capture.
+    """
+    order = ["shall", "should", "info"]
+    groups: dict[str, list[Requirement]] = {}
+    for r in reqs:
+        groups.setdefault(r.level, []).append(r)
+    na_total = sum(1 for r in reqs if requirement_is_untestable_by_design(r.check))
+    print(
+        f"{source} — {len(reqs)} requirements "
+        f"({len(reqs) - na_total} testable, {na_total} NA)"
+    )
+    for level in order + [lv for lv in groups if lv not in order]:
+        group = groups.get(level)
+        if not group:
+            continue
+        width = max(len(r.req_id) for r in group)
+        print(f"\n{level.upper()} ({len(group)}):")
+        for r in group:
+            flag = "NA" if requirement_is_untestable_by_design(r.check) else "  "
+            print(f"  {flag}  {r.req_id:<{width}}  {r.text}")
