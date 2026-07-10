@@ -454,7 +454,7 @@ class BCP0050301Test(GenericTest):
 
                 i = i + 1
 
-            # attributes must match across legs
+            # privacy attributes must match across legs
             ok, msg = self.check_across_legs(True, sender, constraints,
                                              staged["transport_params"], active["transport_params"], elliptic)
             if not ok:
@@ -948,7 +948,7 @@ class BCP0050301Test(GenericTest):
 
                 i = i + 1
 
-            # attributes must match across legs
+            # privacy attributes must match across legs
             ok, msg = self.check_across_legs(
                 True,
                 receiver,
@@ -3060,6 +3060,8 @@ class BCP0050301Test(GenericTest):
         i = 0
         for leg in constraints:
             for k in leg.keys():
+                if not k.startswith("ext_privacy_"):
+                    continue
                 if constraints[i][k] != constraints[0][k]:
                     return False, "{} {} : {} parameter constraints value of leg {} not matching leg 0".format(
                         identity, sender_receiver["id"], k, i)
