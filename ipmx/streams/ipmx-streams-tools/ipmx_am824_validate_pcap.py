@@ -2103,7 +2103,13 @@ def main() -> int:
         metavar="TYPE",
         help="Expected S337M data_type value (SMPTE 338 codec ID, e.g. 0x01=AC-3, 0x15=E-AC-3, 0x07=AAC)",
     )
-    parser.add_argument("--expect-stream-start", action="store_true", help="Require the first RTP packet in the selected capture to have an associated SR")
+    parser.add_argument(
+        "--expect-stream-start",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require the first RTP packet in the selected capture to have an associated SR "
+             "(on by default; use --no-expect-stream-start for captures that begin mid-stream)",
+    )
     parser.add_argument("--hkep", action="store_true", help="Assert that HDCP encryption (HKEP) is active")
     parser.add_argument("--pep",  action="store_true", help="Assert that Privacy Encryption Protocol (PEP) is active")
     parser.add_argument("--full-report", action="store_true", help="Include all requirements (pass, fail, cannot test)")
