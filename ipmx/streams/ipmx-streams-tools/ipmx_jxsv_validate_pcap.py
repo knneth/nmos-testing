@@ -43,6 +43,8 @@ from ipmx_validate_common import (
     check_sr_ntp_vs_capture_rate,
     check_sr_rc_zero,
     check_sr_rtp_timestamp_nominal,
+    check_sdp_multicast_source_filter,
+    check_sdp_session_consistency,
     compute_nominal_period,
     cross_validate_exactframerate,
     cross_validate_video_params,
@@ -59,6 +61,13 @@ from ipmx_validate_common import (
     unwrap_rtp_timestamps,
 )
 from MatroxSdp import MatroxSdp, MatroxSdpEnums, MediaDescriptor
+from MatroxSdpCheck import (
+    SdpCheckError,
+    check_sdp_rfc9134,
+    check_sdp_st2110_10,
+    check_sdp_st2110_21,
+    check_sdp_st2110_22,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1827,6 +1836,42 @@ def check_sdp_packetmode_vs_rtp(ctx: JXSVValidationContext) -> tuple[bool, str]:
     return True, f"SDP packetmode={ctx.sdp.packetmode} matches RTP K-bit"
 
 
+def check_sdp_wrapper(ctx: JXSVValidationContext) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """Comprehensive SDP-side requirement for IPMX JPEG XS streams.
+
+    Runs the per-media-type `video/jxsv` checklist (RFC 9134 + ST 2110-10 +
+    ST 2110-21 + ST 2110-22) and adds the project-local IPMX checks: the IPMX
+    fmtp keyword (TR-10-1 §10.1) and the multicast source-filter signaling
+    (TR-10-9 §17 / RFC 4570).
+    """
+    media = ctx.sdp.media if ctx.sdp is not None else None
+    if media is None:
+        return untestable("No SDP transport file provided (use --sdp)")
+    try:
+        check_sdp_rfc9134(media)
+        check_sdp_st2110_10(media)
+        check_sdp_st2110_21(media)
+        check_sdp_st2110_22(media)
+    except SdpCheckError as exc:
+        return False, f"MatroxSdpCheck failed: {exc}"
+    ok, msg, *tail = check_sdp_ipmx_fmtp(media)
+    if not ok and (not tail or tail[0]):
+        return False, msg
+    sf = check_sdp_multicast_source_filter(media)
+    sf_na = (len(sf) == 3 and not sf[2])
+    if not sf_na and not sf[0]:
+        return False, sf[1]
+    sc = check_sdp_session_consistency(media)
+    if not sc[0]:
+        return False, sc[1]
+    if sf_na:
+        return True, (
+            f"MatroxSdpCheck + IPMX fmtp + session consistency passed; "
+            f"source-filter N/A ({sf[1]})"
+        )
+    return True, "MatroxSdpCheck + IPMX fmtp + source-filter + session consistency all passed"
+
+
 def check_sdp_port_vs_stream(ctx: JXSVValidationContext) -> tuple[bool, str]:
     """SDP port SHALL match the detected RTP destination port."""
     if ctx.sdp is None:
@@ -2301,6 +2346,10 @@ def build_requirements(ctx: JXSVValidationContext) -> list[Requirement]:
     add("SDP-PACKETMODE", "shall",
         "SDP packetmode SHALL match the K-bit in the RTP payload header (RFC 9134 §7).",
         lambda c=ctx: check_sdp_packetmode_vs_rtp(c))
+    add("IPMX-SDP-WRAPPER", "shall",
+        "SDP shall satisfy RFC 9134 + ST 2110-10 + ST 2110-21 + ST 2110-22 + "
+        "IPMX fmtp + TR-10-9 §17 source-filter (multicast).",
+        lambda c=ctx: check_sdp_wrapper(c))
 
     # --- SHOULD requirements ---
     add("TR-10-11-7b", "should",
