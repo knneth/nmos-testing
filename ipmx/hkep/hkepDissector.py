@@ -2632,15 +2632,58 @@ class HKEPDissector:
             "RepeaterAuth_Stream_Ready",
             "Null message"
         ]
-        
+
+        # Substantive RepeaterAuth messages always belong to the RepeaterAuth phase.
+        substantive_repeaterauth_messages = {
+            "RepeaterAuth_Send_ReceiverID_List",
+            "RepeaterAuth_Send_Ack",
+            "RepeaterAuth_Stream_Manage",
+            "RepeaterAuth_Stream_Ready",
+        }
+
+        # Pre-RepeaterAuth handshake message types (AKE/LC/SKE/RTT phases). These always
+        # precede the RepeaterAuth phase within an exchange. Note: Receiver_AuthStatus and
+        # Null are intentionally excluded here - Receiver_AuthStatus is a post-auth status
+        # message (it can appear after the RepeaterAuth exchange) and Null is phase-agnostic,
+        # so neither marks the pre-RepeaterAuth boundary.
+        pre_repeaterauth_handshake_messages = {
+            "AKE_PreInit", "AKE_PreInitStatus",
+            "AKE_Init", "AKE_Send_Cert", "AKE_No_Stored_km", "AKE_Stored_km",
+            "AKE_Send_rrx", "AKE_Send_H_prime", "AKE_Send_Pairing_Info",
+            "AKE_Transmitter_Info", "AKE_Receiver_Info",
+            "LC_Init", "LC_Send_L_prime",
+            "SKE_Send_Eks",
+            "RTT_Ready", "RTT_Challenge",
+        }
+
+        # A "Null message" is a phase-agnostic keep-alive: it can legitimately appear in
+        # any phase (AKE/LC/SKE/RTT) as well as being a valid RepeaterAuth-phase opener
+        # (e.g. a reconnect may start with Null). Therefore a Null only counts as a
+        # RepeaterAuth message when it occurs AFTER the last pre-RepeaterAuth handshake
+        # message. This prevents a keep-alive Null interleaved in the AKE phase from being
+        # mistaken for the sender/receiver's initial RepeaterAuth message.
+        pre_ra_timestamps = [
+            m.get('timestamp', 0) for m in messages
+            if m.get('hkep', {}).get('message_type') in pre_repeaterauth_handshake_messages
+        ]
+        last_pre_ra_timestamp = max(pre_ra_timestamps) if pre_ra_timestamps else None
+
+        def is_repeaterauth_phase_msg(msg):
+            msg_type = msg.get('hkep', {}).get('message_type')
+            if msg_type in substantive_repeaterauth_messages:
+                return True
+            if msg_type == "Null message":
+                return (last_pre_ra_timestamp is None
+                        or msg.get('timestamp', 0) > last_pre_ra_timestamp)
+            return False
+
         if decoder_messages:
             sorted_decoder_msgs = sorted(decoder_messages, key=lambda x: x.get('timestamp', 0))
             
             # Find first RepeaterAuth message (skip all AKE/LC/SKE/RTT messages)
             first_repeaterauth_decoder_msg = None
             for msg in sorted_decoder_msgs:
-                msg_type = msg.get('hkep', {}).get('message_type')
-                if msg_type in repeaterauth_messages:
+                if is_repeaterauth_phase_msg(msg):
                     first_repeaterauth_decoder_msg = msg
                     break
             
@@ -2668,8 +2711,7 @@ class HKEPDissector:
             # Find first RepeaterAuth message (skip all AKE/LC/SKE/RTT messages)
             first_repeaterauth_encoder_msg = None
             for msg in sorted_encoder_msgs:
-                msg_type = msg.get('hkep', {}).get('message_type')
-                if msg_type in repeaterauth_messages:
+                if is_repeaterauth_phase_msg(msg):
                     first_repeaterauth_encoder_msg = msg
                     break
             
@@ -2714,8 +2756,8 @@ class HKEPDissector:
             hkep_data = msg.get('hkep', {})
             msg_type = hkep_data.get('message_type')
             direction = hkep_data.get('direction', '')
-            
-            if msg_type not in repeaterauth_messages + ["Null message"]:
+
+            if not is_repeaterauth_phase_msg(msg):
                 continue
             
             if direction == "Decoder->Encoder":  # Receiver
