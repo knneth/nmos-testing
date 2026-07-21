@@ -141,6 +141,11 @@ class MatroxEdid:
         which allows only the unavoidable +/-1 unit of 10 kHz quantization.
         With this rule, 60/1 (clk 148500) and 60000/1001 (clk 148350) for
         1920x1080 @ 2200x1125 are correctly distinguished.
+
+        For interlaced timings the DTD stores per-field vertical values, so
+        pixel_clock / (H_total * V_total) is the field rate. numerator/
+        denominator is an NMOS grain (frame) rate, so the ideal is doubled
+        (field rate = 2 * frame rate) before comparing.
         """
         dtd = self.base[0x36:0x36 + 18]
         if len(dtd) != 18 or denominator == 0:
@@ -156,8 +161,15 @@ class MatroxEdid:
         v_total = v_active + v_blank
         if h_total == 0 or v_total == 0:
             return False
+        
+        interlaced = bool(dtd[17] & 0x80)
+
         encoded = pclk_10khz * 10_000 * denominator
         ideal = h_total * v_total * numerator
+
+        if interlaced:
+            ideal *= 2
+
         return abs(encoded - ideal) <= 10_000 * denominator
 
     # -- audio: CTA-861 Short Audio Descriptors -----------------------------
