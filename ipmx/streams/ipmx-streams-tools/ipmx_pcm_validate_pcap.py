@@ -52,6 +52,7 @@ from ipmx_validate_common import (
     check_sdp_session_consistency,
     check_sr_initial_rtp_clock,
     check_sr_rc_zero,
+    check_sr_compound_packet,
     parse_sender_reports,
     summarize_results,
     untestable,
@@ -1294,6 +1295,10 @@ def build_requirements() -> list[Requirement]:
     add("TR-10-1-8.7-RC", "should",
         "RTCP SR reception report count (RC) should be 0 (TR-10-1 §8.7).",
         lambda c: check_sr_rc_zero(c.sender_reports))
+    add("TR-10-1-8.7-COMPOUND", "shall",
+        "RTCP Sender Reports shall be sent in a compound RTCP packet — report "
+        "packet first and an SDES CNAME item present (RFC 3550 §6.1, TR-10-1 §8.7).",
+        lambda c: check_sr_compound_packet(c.pcap, c.stream_info))
     add("TR-10-1-10.1-IPMX-FMTP", "shall",
         "SDP a=fmtp line shall contain the IPMX keyword (TR-10-1 §10.1).",
         lambda c: check_sdp_ipmx_fmtp(c.sdp_media))

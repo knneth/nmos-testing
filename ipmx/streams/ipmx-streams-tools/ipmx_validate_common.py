@@ -1405,6 +1405,132 @@ def check_sr_rc_zero(
     return True, f"All {len(sender_reports)} SR(s) have RC=0"
 
 
+# RTCP packet types (RFC 3550 §12.1) and SDES item types (§6.5).
+_RTCP_PT_SR = 200
+_RTCP_PT_RR = 201
+_RTCP_PT_SDES = 202
+_SDES_ITEM_END = 0
+_SDES_ITEM_CNAME = 1
+
+
+def _sdes_contains_cname(packet: bytes) -> bool:
+    """Return True if an RTCP SDES packet (PT=202) carries a CNAME item.
+
+    Parses the chunk/item structure of RFC 3550 §6.5: the source count (SC)
+    field gives the number of SDES chunks; each chunk is an SSRC/CSRC (4 bytes)
+    followed by a list of items terminated by a null (type 0) octet and padded
+    to the next 32-bit boundary.  A CNAME item has item type 1.
+    """
+    if len(packet) < 4:
+        return False
+    source_count = packet[0] & 0x1F
+    offset = 4
+    n = len(packet)
+    for _ in range(source_count):
+        if offset + 4 > n:
+            return False
+        offset += 4  # SSRC/CSRC of this chunk
+        while offset < n:
+            item_type = packet[offset]
+            offset += 1
+            if item_type == _SDES_ITEM_END:
+                # Null item ends the chunk; skip padding to the 32-bit boundary.
+                while offset % 4 != 0 and offset < n:
+                    offset += 1
+                break
+            if offset >= n:
+                return False
+            item_len = packet[offset]
+            offset += 1
+            if item_type == _SDES_ITEM_CNAME:
+                return True
+            offset += item_len
+    return False
+
+
+def check_sr_compound_packet(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """RTCP Sender Reports SHALL be sent in a compound packet (RFC 3550 §6.1).
+
+    RFC 3550 §6.1 places three MUSTs on every RTCP transmission:
+
+      1. it MUST be a compound packet of at least two individual RTCP packets;
+      2. the first RTCP packet MUST be a report packet (SR=200 or RR=201) to
+         facilitate header validation;
+      3. an SDES packet (PT=202) containing a CNAME item MUST be included in
+         each compound packet.
+
+    The §9.1 exception applies only to *encrypted* RTCP; IPMX sends RTCP in
+    cleartext (the SR fields and IPMX Info Block are read directly), so all
+    three MUSTs bind unconditionally here.
+
+    Evaluates every UDP datagram on the RTCP port (filtered by destination IP
+    when known) whose RTCP content includes a Sender Report, and reports the
+    datagrams that violate any of the three rules.
+    """
+    port = stream_info.rtcp_port if stream_info is not None else None
+    dst_ip = stream_info.dst_ip if stream_info is not None else None
+
+    total = 0
+    violations: list[str] = []
+    for udp in iter_udp_packets(pcap_path, port):
+        if dst_ip is not None and udp.dst_ip != dst_ip:
+            continue
+        subpackets = list(ipmx_sender_report.iter_rtcp_packets(udp.payload))
+        if not subpackets:
+            continue
+        pts = [pkt[1] for pkt in subpackets if len(pkt) >= 2]
+        # Only evaluate datagrams that actually carry a Sender Report.
+        if _RTCP_PT_SR not in pts:
+            continue
+        total += 1
+
+        problems: list[str] = []
+        # MUST #1 — compound packet of at least two individual RTCP packets.
+        if len(subpackets) < 2:
+            problems.append(
+                f"only {len(subpackets)} RTCP packet(s); a compound packet "
+                f"requires at least 2"
+            )
+        # MUST #2 — the first RTCP packet is a report packet (SR or RR).
+        first_pt = pts[0] if pts else None
+        if first_pt not in (_RTCP_PT_SR, _RTCP_PT_RR):
+            problems.append(
+                f"first RTCP packet PT={first_pt} is not a report packet (SR/RR)"
+            )
+        # MUST #3 — an SDES packet carrying a CNAME item is present.
+        sdes_pkts = [pkt for pkt in subpackets
+                     if len(pkt) >= 2 and pkt[1] == _RTCP_PT_SDES]
+        if not sdes_pkts:
+            problems.append("no SDES (PT=202) packet present")
+        elif not any(_sdes_contains_cname(pkt) for pkt in sdes_pkts):
+            problems.append("SDES present but no CNAME item found")
+
+        if problems:
+            violations.append(
+                f"datagram @ {udp.capture_time:.6f}s (PTs={pts}): "
+                + "; ".join(problems)
+            )
+
+    if total == 0:
+        return untestable("No RTCP datagrams containing a Sender Report found")
+    if violations:
+        shown = " | ".join(violations[:5])
+        more = "" if len(violations) <= 5 else f" (+{len(violations) - 5} more)"
+        return (
+            False,
+            f"{len(violations)}/{total} SR-bearing RTCP datagram(s) violate "
+            f"RFC 3550 §6.1 compound-packet rules: {shown}{more}",
+        )
+    return (
+        True,
+        f"All {total} SR-bearing RTCP datagram(s) are RFC 3550 §6.1 compound "
+        f"packets (report packet first, SDES CNAME present)",
+    )
+
+
 def compute_cmax_type_w(npackets: int | float | Fraction, tframe: Fraction) -> int:
     """Compute CMAX for a Type W sender per TR-10-1 §8.1 / ST 2110-21 §7.1.4.
 
