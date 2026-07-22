@@ -4012,14 +4012,14 @@ class IS1101Test(GenericTest):
         print("[EDID-VIDEO] preferred (w,h,fps)={}".format(pref))
         if dtd is not None:
             encoded = dtd["pixel_clock_10khz"] * 10_000 * den
-            ideal = dtd["h_total"] * dtd["v_total"] * num
-            # Interlaced DTDs store per-field vertical values, so the DTD's
-            # field rate is twice the NMOS grain (frame) rate; double ideal to
-            # match matches_preferred_grain_rate().
-            if dtd["interlaced"]:
-                ideal *= 2
-            print("[EDID-VIDEO] exact-match check: encoded={} ideal={} diff={} tol={} interlaced={}".format(
-                encoded, ideal, encoded - ideal, 10_000 * den, dtd["interlaced"]))
+            # Interlaced DTDs store per-field vertical values; lines-per-frame
+            # is 2*V_field + 1 (VESA GTF 1.1 section 7.6.3 -- two half-lines at
+            # the odd-field front porch and even-field back porch). Mirror
+            # matches_preferred_grain_rate() so this trace agrees with it.
+            v_frame = (2 * dtd["v_total"] + 1) if dtd["interlaced"] else dtd["v_total"]
+            ideal = dtd["h_total"] * v_frame * num
+            print("[EDID-VIDEO] exact-match check: encoded={} ideal={} diff={} tol={} interlaced={} v_frame={}".format(
+                encoded, ideal, encoded - ideal, 10_000 * den, dtd["interlaced"], v_frame))
         compliant = edid.matches_preferred_grain_rate(num, den)
         print("[EDID-VIDEO] compliant={}".format(compliant))
         return compliant
