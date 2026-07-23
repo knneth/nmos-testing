@@ -46,6 +46,7 @@ except ImportError:
 
 import ipmx_pep as pepmod
 import ipmx_usb_message as usb
+import usb_decode
 from ipmx_usb_message import IpmxUsbMessage, MsgType, StatusCode, _VALID_STATUS_CODES
 from tcp_reassembler import TcpConnection, make_stream_key, find_contiguous_blocks
 
@@ -884,8 +885,8 @@ def _validate_control_channel(
                       packet_number=cm.packet_number)
     else:
         # ---------------------------------------------------------------- §12 — CTR monotonicity
-        _check_ctr_monotonic(s, sender_msgs, "Sender→Receiver (control)")
-        _check_ctr_monotonic(s, receiver_msgs, "Receiver→Sender (control)")
+        _check_ctr_monotonic(s, sender_msgs, "Sender->Receiver (control)")
+        _check_ctr_monotonic(s, receiver_msgs, "Receiver->Sender (control)")
         # ---------------------------------------------------------------- §12 — KEYVERSION consistency
         _check_keyversion_consistency(s, sender_msgs, receiver_msgs, "control")
 
@@ -904,8 +905,8 @@ def _check_keyversion_consistency(
     share one (possibly different) KEYVERSION.
     """
     s = session
-    for direction_label, msgs in (("Sender→Receiver", sender_msgs),
-                                  ("Receiver→Sender", receiver_msgs)):
+    for direction_label, msgs in (("Sender->Receiver", sender_msgs),
+                                  ("Receiver->Sender", receiver_msgs)):
         kv_set: set[int] = set()
         for cm in msgs:
             kv = cm.msg.key_version
@@ -1303,9 +1304,9 @@ def _validate_data_channel(
     else:
         # ---------------------------------------------------------------- §12 — CTR monotonicity
         _check_ctr_monotonic(s, sender_msgs,
-                             f"Sender→Receiver (data substreamid=0x{channel.substreamid:02X})")
+                             f"Sender->Receiver (data substreamid=0x{channel.substreamid:02X})")
         _check_ctr_monotonic(s, receiver_msgs,
-                             f"Receiver→Sender (data substreamid=0x{channel.substreamid:02X})")
+                             f"Receiver->Sender (data substreamid=0x{channel.substreamid:02X})")
         # ---------------------------------------------------------------- §12 — KEYVERSION consistency
         _check_keyversion_consistency(
             s, sender_msgs, receiver_msgs,
@@ -1633,8 +1634,44 @@ def _format_payload(payload: dict) -> str:
     return "  " + "  ".join(parts) if parts else ""
 
 
-def _print_messages(sess: Session) -> None:
-    """Print every message on the control channel and each data channel."""
+def _print_messages(sess: Session, decode_usb: bool = False) -> None:
+    """Print every message on the control channel and each data channel.
+
+    When ``decode_usb`` is set, each row that carries a tunneled USB SETUP
+    packet (USBDEVREQ) or descriptor payload (TRANSFERDATA) is followed by
+    indented, ASCII-only annotation lines decoding the USB standard layer.
+    Returned descriptors are decoded in the context of the SETUP request that
+    produced them, correlated per-channel by SEQNUM.
+    """
+
+    def _usb_annotations(m: IpmxUsbMessage,
+                         setup_by_seqnum: dict[int, dict]) -> list[str]:
+        """Return decoded USB lines for one message, updating the SEQNUM map."""
+        p = m.payload
+        if not p or p.get('_encrypted'):
+            return []
+        lines: list[str] = []
+        seqnum = p.get('seqnum')
+
+        # SUBMIT direction: decode the 8-byte SETUP and remember it by SEQNUM so
+        # the matching RETURN's descriptor can be decoded in context.
+        req_hex = p.get('usbdevreq')
+        if req_hex:
+            setup = usb_decode.decode_setup(bytes.fromhex(req_hex))
+            if setup:
+                if seqnum is not None:
+                    setup_by_seqnum[seqnum] = setup
+                lines.append(setup['summary'])
+
+        # Any direction may carry returned/outgoing descriptor bytes.
+        data_hex = p.get('transferdata')
+        if data_hex:
+            setup = setup_by_seqnum.get(seqnum) if seqnum is not None else None
+            hint_type = setup.get('descriptor_type') if setup else None
+            hint_index = setup.get('descriptor_index') if setup else None
+            lines.extend(usb_decode.describe_descriptor(
+                bytes.fromhex(data_hex), hint_type, hint_index))
+        return lines
 
     def _dump(label: str, messages: list[ChannelMessage]) -> None:
         if not messages:
@@ -1643,13 +1680,17 @@ def _print_messages(sess: Session) -> None:
         print(f"\n  {label}  ({len(messages)} messages)")
         print(f"  {'#Pkt':<6} {'Dir':<5} {'Type':<38} {'Len':>6}  Payload")
         print(f"  {'-'*5:<6} {'-'*4:<5} {'-'*37:<38} {'-'*6}  {'-'*50}")
+        setup_by_seqnum: dict[int, dict] = {}
         for cm in messages:
             m = cm.msg
             src_short = f"{cm.src_ip.split('.')[-1]}:{cm.src_port}"
             dst_short = f"{cm.dst_ip.split('.')[-1]}:{cm.dst_port}"
-            direction = f"{src_short}→{dst_short}"
+            direction = f"{src_short}->{dst_short}"
             payload_str = _format_payload(m.payload)
             print(f"  {cm.packet_number:<6} {direction:<30} {m.msg_type_name:<38} {m.length:>6}{payload_str}")
+            if decode_usb:
+                for line in _usb_annotations(m, setup_by_seqnum):
+                    print(f"  {'':6} {'':30} {line}")
 
     _dump("Control channel", sess.control.messages)
     for substreamid, ch in sess.data_channels.items():
@@ -1662,7 +1703,7 @@ def _print_messages(sess: Session) -> None:
 
 
 def _print_session(sess: Session, verbose: bool, show_messages: bool = False,
-                   show_requirements: bool = False) -> None:
+                   show_requirements: bool = False, decode_usb: bool = False) -> None:
     print(f"\n{'='*72}")
     print(f"Session: Sender={sess.sender_ip}:{sess.sender_port}")
     if sess.control.sender_info:
@@ -1694,7 +1735,7 @@ def _print_session(sess: Session, verbose: bool, show_messages: bool = False,
         print("  [OK] No violations found")
 
     if show_messages:
-        _print_messages(sess)
+        _print_messages(sess, decode_usb=decode_usb)
 
     if show_requirements:
         _print_requirements(sess)
@@ -1760,6 +1801,9 @@ def main() -> int:
                         help="Show stream classification details")
     parser.add_argument('--messages', '-m', action='store_true',
                         help="Print every parsed message with decoded fields")
+    parser.add_argument('--decode-usb', action='store_true',
+                        help="With -m, also decode the tunneled USB standard "
+                             "layer (SETUP packets and returned descriptors)")
     parser.add_argument('--requirements', '-r', action='store_true',
                         help="Print a per-requirement pass/fail checklist")
     parser.add_argument('--show-tcp-issues', action='store_true',
@@ -1825,7 +1869,8 @@ def main() -> int:
         for sess in sessions:
             _print_session(sess, verbose=args.verbose,
                            show_messages=args.messages,
-                           show_requirements=args.requirements)
+                           show_requirements=args.requirements,
+                           decode_usb=args.decode_usb)
 
         total_errors   = sum(len([f for f in s.findings if f.severity == Severity.ERROR]) for s in sessions)
         total_warnings = sum(len([f for f in s.findings if f.severity == Severity.WARNING]) for s in sessions)
