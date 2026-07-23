@@ -480,13 +480,15 @@ class IpmxSdpTest(GenericTest):
                         clock_found = True
                         if clock["ref_type"] == "ptp":
                             if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
-                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                (not clock["traceable"] and (sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize())) or
+                                (clock["traceable"] and not sdp.primary_media.ts_ref_clock_ptp_traceable) or
                                     sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
-                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, traceable {}, version {}"
                                                  " do not match Node clock {}"
                                                  .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
                                                          sdp.primary_media.ts_delay,
                                                          sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_traceable,
                                                          sdp.primary_media.ts_ref_clock_ptp_version, clock))
                         else:
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
@@ -814,13 +816,15 @@ class IpmxSdpTest(GenericTest):
                         clock_found = True
                         if clock["ref_type"] == "ptp":
                             if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
-                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                (not clock["traceable"] and (sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize())) or
+                                (clock["traceable"] and not sdp.primary_media.ts_ref_clock_ptp_traceable) or
                                     sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
-                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, traceable {}, version {}"
                                                  " do not match Node clock {}"
                                                  .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
                                                          sdp.primary_media.ts_delay,
                                                          sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_traceable,
                                                          sdp.primary_media.ts_ref_clock_ptp_version, clock))
                         else:
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
@@ -2683,13 +2687,15 @@ class IpmxSdpTest(GenericTest):
                         clock_found = True
                         if clock["ref_type"] == "ptp":
                             if (sdp.primary_media.ts_ref_clock_source != "ptp" or sdp.primary_media.ts_delay != 0 or
-                                sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize() or
+                                (not clock["traceable"] and (sdp.primary_media.ts_ref_clock_ptp_gmid.capitalize() != clock["gmid"].capitalize())) or
+                                (clock["traceable"] and not sdp.primary_media.ts_ref_clock_ptp_traceable) or
                                     sdp.primary_media.ts_ref_clock_ptp_version != clock["version"]):
-                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, version {}"
+                                return test.FAIL("Sender {} SDP media clock: source {}, delay {}, gmid {}, traceable {}, version {}"
                                                  " do not match Node clock {}"
                                                  .format(sender["id"], sdp.primary_media.ts_ref_clock_source,
                                                          sdp.primary_media.ts_delay,
                                                          sdp.primary_media.ts_ref_clock_ptp_gmid,
+                                                         sdp.primary_media.ts_ref_clock_ptp_traceable,
                                                          sdp.primary_media.ts_ref_clock_ptp_version, clock))
                         else:
                             if sdp.primary_media.ts_ref_clock_source != "localmac":
