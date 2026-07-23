@@ -2112,8 +2112,10 @@ class IpmxSdpTest(GenericTest):
                                if receiver["format"] == FormatVideo]
             audio_receivers = [receiver for receiver in self.is04_resources["receivers"].values()
                                if receiver["format"] == FormatAudio]
+            data_receivers = [receiver for receiver in self.is04_resources["receivers"].values()
+                               if receiver["format"] == FormatData]
 
-            receivers = video_receivers + audio_receivers
+            receivers = video_receivers + audio_receivers + data_receivers
 
             receiver_tested = list()
 
@@ -2123,6 +2125,8 @@ class IpmxSdpTest(GenericTest):
                     format = "video"
                 elif receiver in audio_receivers:
                     format = "audio"
+                elif receiver in data_receivers:
+                    format = "data"
                 else:
                     return test.FAIL("UNEXPECTED receiver {}".format(receiver["id"]))
 

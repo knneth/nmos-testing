@@ -102,6 +102,10 @@ This folder contains the IPMX NMOS Testing package. Follow these instructions to
 
     !!! Note that the script now gets the LOCAL interface as a parameter.
 
+    !!! Do not forget to have the VB440 subscrining to the Sender's streams if the VB440 capture mode is used. 
+
+- The following steps, a) un IPMX-SETUP-XYZ.bat, b) Run the IS-04 test suite on your Receiver, c) Run the IS-04 test suite on your Sender, and d) Activate your Sender and capture an SDP transport file and a PCAP, should be performed to make sure your environment is properly setup.
+
 - Run IPMX-SETUP-XYZ.bat
 
 - Run the IS-04 test suite on your Receiver

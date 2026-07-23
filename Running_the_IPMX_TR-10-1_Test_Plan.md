@@ -11,6 +11,8 @@ This document provides step-by-step instructions for running the IPMX TR-10 test
 
 ## Prerequisites Checklist
 
+The following steps, as described in IPMX-README.txt, ensure that your environment is properly setup.
+
 Before running tests, ensure:
 
 - ✅ Python virtual environment is activated (`.venv\Scripts\activate.bat`)
