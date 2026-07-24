@@ -3096,6 +3096,9 @@ class IpmxSdpTest(GenericTest):
                         make_con(CapFormatChannelCount, 2, 8),
                         make_con(CapTransportPacketTime, 1))
                 ]
+            elif flow_media_type == "application/usb":
+                checkCons = check_conset("Check USB", primary_capset,
+                    CapFormatMediaType)
             else:
                 return False, "Sender {} invalid media type {}".format(sender["id"], flow_media_type)
 
@@ -3335,7 +3338,10 @@ class IpmxSdpTest(GenericTest):
                         make_con(CapFormatSampleRate, 48000),
                         make_con(CapFormatChannelCount, 2, 8),
                         make_con(CapTransportPacketTime, 1))
-                ]                
+                ]
+            elif flow_media_type == "application/usb":
+                checkCons = check_conset("Check USB", primary_capset,
+                    CapFormatMediaType)
             else:
                 return False, "Receiver {} invalid media type {}".format(receiver["id"], flow_media_type)
 
