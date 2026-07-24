@@ -48,6 +48,8 @@ from ipmx_validate_common import (
     check_dscp_rtp_marking,
     check_dscp_sr_matches_rtp,
     check_multicast_mac_mapping,
+    check_sr_mac_mapping,
+    check_sr_rtcp_port,
     check_sdp_ipmx_fmtp,
     check_sdp_multicast_source_filter,
     check_sdp_session_consistency,
@@ -1896,6 +1898,8 @@ def build_requirements(ctx: ValidationContext) -> list[Requirement]:
     add("TR-10-9-16a", "shall", "IPMX Senders conforming to TR-10-7 (compressed video) shall mark RTP packets with the TR-10-9 §16 default DSCP AF42(36).", lambda c=ctx: check_dscp_rtp_marking(c.pcap, c.stream_info, 36))
     add("TR-10-9-16b", "shall", "IPMX Senders shall mark outgoing RTCP Sender Report packets with the same DSCP value as the respective RTP stream packets (TR-10-9 §16).", lambda c=ctx: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
     add("RFC1112-MCAST-MAC", "shall", "IPv4 multicast RTP packets SHALL use the RFC 1112 §6.4 Ethernet destination MAC derived from the group address (01:00:5e + low 23 bits).", lambda c=ctx: check_multicast_mac_mapping(c.pcap, c.stream_info))
+    add("RFC1112-SR-MAC", "shall", "IPv4 multicast RTCP Sender Report packets SHALL use the RFC 1112 §6.4 Ethernet destination MAC of the group address.", lambda c=ctx: check_sr_mac_mapping(c.sender_reports))
+    add("TR-10-1-8.7-SR-PORT", "shall", "RTCP Sender Reports SHALL be sent on the RTP destination port + 1 (TR-10-1 §8.7 / RFC 3550 §11).", lambda c=ctx: check_sr_rtcp_port(c.pcap, c.stream_info))
     add("TR-10-15b-100", "shall", "PACI packets defined in RFC 7798 shall not be produced by an IPMX Sender.", lambda c=ctx: check_paci(c))
     add("TR-10-15b-101", "shall", "A UDP/IP packet shall not contain more than one VCL NAL Unit.", lambda c=ctx: check_packet_vcl_limit(c))
     add("TR-10-15b-103", "shall", "H.265 coded video shall be transmitted and decoded using the HRD transmitter and decoder schedules.", lambda _: untestable("HRD presence verified by TR-10-15b-114; schedule conformance not testable from PCAP"))

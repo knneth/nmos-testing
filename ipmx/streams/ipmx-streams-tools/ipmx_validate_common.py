@@ -139,6 +139,9 @@ class SenderReportInfo:
     # DS-field DSCP (top 6 bits) of the IP packet carrying this RTCP SR;
     # used to enforce TR-10-9 §16 (SR marked identically to the RTP stream).
     dscp: int | None = None
+    # Ethernet (L2) destination MAC (lowercase colon-hex) of the frame carrying
+    # this RTCP SR; used to validate the RFC 1112 §6.4 multicast MAC mapping.
+    dst_mac: str | None = None
 
     @property
     def ntp_unix(self) -> float:
@@ -313,6 +316,7 @@ def parse_sender_reports(
                     raw_blocks=parsed.raw_blocks,
                     reception_report_count=parsed.reception_report_count,
                     dscp=udp.dscp,
+                    dst_mac=udp.dst_mac,
                 )
             )
     reports.sort(key=lambda sr: sr.capture_time)
@@ -2147,6 +2151,93 @@ def check_multicast_mac_mapping(
     return True, (
         f"RTP destination MAC {found} matches the RFC 1112 §6.4 mapping for "
         f"multicast group {dst_ip} (across {total} packets)"
+    )
+
+
+def check_sr_mac_mapping(
+    sender_reports: list[SenderReportInfo],
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """RTCP Sender Report packets sent to an IPv4 multicast group SHALL carry
+    the RFC 1112 §6.4 Ethernet destination MAC of that group (``01:00:5e`` +
+    low 23 bits) — the SR-packet counterpart of ``check_multicast_mac_mapping``.
+
+    Only IPv4 multicast SR destinations are in scope; unicast/IPv6 are N/A.
+    """
+    if not sender_reports:
+        return untestable("No RTCP Sender Reports — cannot read SR destination MAC")
+    mcast = [sr for sr in sender_reports if _is_ipv4_multicast(sr.dst_ip or "")]
+    if not mcast:
+        return untestable(
+            "No IPv4 multicast RTCP SR destination — RFC 1112 L2 mapping N/A"
+        )
+    if all(sr.dst_mac is None for sr in mcast):
+        return untestable("RTCP SR packets carry no L2 destination MAC")
+    mismatches: list[tuple[str, str, str]] = []
+    for sr in mcast:
+        if sr.dst_mac is None:
+            continue
+        expected = _ipv4_multicast_to_mac(sr.dst_ip)
+        if expected is not None and sr.dst_mac != expected:
+            mismatches.append((sr.dst_ip, sr.dst_mac, expected))
+    if mismatches:
+        ip, found, expected = mismatches[0]
+        return False, (
+            f"RTCP SR destination MAC {found} does not match the RFC 1112 §6.4 "
+            f"mapping {expected} for multicast group {ip} "
+            f"({len(mismatches)}/{len(mcast)} SR(s) mismatched)"
+        )
+    sample = next(sr for sr in mcast if sr.dst_mac is not None)
+    return True, (
+        f"RTCP SR destination MAC {sample.dst_mac} matches the RFC 1112 §6.4 "
+        f"mapping for multicast group {sample.dst_ip} (across {len(mcast)} SR(s))"
+    )
+
+
+def check_sr_rtcp_port(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """RTCP Sender Reports SHALL be sent on the RTP destination port + 1
+    (TR-10-1 §8.7 / RFC 3550 §11).
+
+    The capture is re-scanned for RTCP SRs belonging to this stream (matched by
+    the group destination IP and SSRC) *without* assuming the RTCP port, so a
+    sender that placed RTCP on the wrong port is reported as a port mismatch
+    rather than silently appearing as "no Sender Reports".
+    """
+    if stream_info is None:
+        return untestable("RTP stream not detected — cannot check RTCP port")
+    rtp_port = getattr(stream_info, "dst_port", None)
+    dst_ip = getattr(stream_info, "dst_ip", None)
+    ssrc = getattr(stream_info, "ssrc", None)
+    if rtp_port is None:
+        return untestable("RTP port unknown — cannot derive expected RTCP port")
+    expected = rtp_port + 1
+
+    observed: "Counter[int | None]" = Counter()
+    for udp in iter_udp_packets(pcap_path, None):
+        if dst_ip is not None and udp.dst_ip != dst_ip:
+            continue
+        for packet in ipmx_sender_report.iter_rtcp_packets(udp.payload):
+            parsed = ipmx_sender_report.parse_rtcp_sender_report(packet)
+            if parsed is None:
+                continue
+            if ssrc is not None and parsed.ssrc != ssrc:
+                continue
+            observed[udp.dst_port] += 1
+    if not observed:
+        return untestable(
+            "No RTCP Sender Reports found for the stream — cannot check RTCP port"
+        )
+    bad = sorted(p for p in observed if p != expected)
+    if bad:
+        return False, (
+            f"RTCP SR observed on destination port(s) {bad}; TR-10-1 §8.7 "
+            f"requires RTP port + 1 = {expected} (RTP port {rtp_port})"
+        )
+    return True, (
+        f"RTCP SR on destination port {expected} = RTP port {rtp_port} + 1 "
+        f"({sum(observed.values())} SR(s))"
     )
 
 

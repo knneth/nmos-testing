@@ -41,6 +41,8 @@ from ipmx_validate_common import (
     check_dscp_rtp_marking,
     check_dscp_sr_matches_rtp,
     check_multicast_mac_mapping,
+    check_sr_mac_mapping,
+    check_sr_rtcp_port,
     check_sdp_ipmx_fmtp,
     check_sr_initial_rtp_clock,
     check_sr_ntp_self_consistent,
@@ -2351,6 +2353,14 @@ def build_requirements(ctx: JXSVValidationContext) -> list[Requirement]:
         "IPv4 multicast RTP packets SHALL use the RFC 1112 §6.4 Ethernet "
         "destination MAC derived from the group address (01:00:5e + low 23 bits).",
         lambda c=ctx: check_multicast_mac_mapping(c.pcap, c.stream_info))
+    add("RFC1112-SR-MAC", "shall",
+        "IPv4 multicast RTCP Sender Report packets SHALL use the RFC 1112 §6.4 "
+        "Ethernet destination MAC of the group address.",
+        lambda c=ctx: check_sr_mac_mapping(c.sender_reports))
+    add("TR-10-1-8.7-SR-PORT", "shall",
+        "RTCP Sender Reports SHALL be sent on the RTP destination port + 1 "
+        "(TR-10-1 §8.7 / RFC 3550 §11).",
+        lambda c=ctx: check_sr_rtcp_port(c.pcap, c.stream_info))
 
     # --- SDP transport file cross-validation (when --sdp is provided) ---
     add("SDP-PORT", "shall",
