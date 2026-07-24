@@ -104,6 +104,7 @@ VideoH264 = "video/H264"
 AudioL16 = "audio/L16"
 AudioL24 = "audio/L24"
 AudioAM824 = "audio/AM824"
+DataUsb = "application/usb"
 
 SamplingYCbCr_444 = "YCbCr-4:4:4"
 SamplingYCbCr_422 = "YCbCr-4:2:2"
@@ -3099,6 +3100,10 @@ class IpmxSdpTest(GenericTest):
             elif flow_media_type == "application/usb":
                 checkCons = check_conset("Check USB", primary_capset,
                     CapFormatMediaType)
+                or_consets = [
+                    alt_conset("Check USB",
+                        make_con(CapFormatMediaType, DataUsb))
+                ]
             else:
                 return False, "Sender {} invalid media type {}".format(sender["id"], flow_media_type)
 
