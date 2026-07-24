@@ -65,6 +65,7 @@ from ipmx_validate_common import (
     check_sr_rc_zero,
     check_sr_compound_packet,
     parse_sender_reports,
+    print_first_sr_block_version,
     summarize_results,
     untestable,
 )
@@ -2173,6 +2174,8 @@ def main() -> int:
     if ctx.encrypted:
         print("[INFO] Encryption detected — AM824 payload content is not accessible.")
         print("       Subframe bit-field, channel-status, and S337M checks will be marked as untestable.\n")
+
+    print_first_sr_block_version(ctx.sender_reports)
 
     results = run_requirements(ctx, build_requirements())
 

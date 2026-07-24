@@ -2340,6 +2340,29 @@ def summarize_results(results: list[RequirementResult]) -> str:
     return f"{passed}/{total} passed, {failed} failed"
 
 
+def print_first_sr_block_version(sender_reports: list[SenderReportInfo]) -> None:
+    """Print the IPMX Info Block version of the first Sender Report in the PCAP.
+
+    The IPMX Info Block (TR-10-1 §8.7, tag 0x5831) opens with a one-byte
+    version field that identifies its layout revision (see
+    ``ipmx_sender_report.ParsedIPMXInfoBlock.version``). This reports that
+    version from the first Sender Report in the capture that actually carries
+    an IPMX Info Block, labelled "initial block version", and states plainly
+    when none is present.
+    """
+    for sr in sender_reports:
+        if sr.ipmx_info is not None:
+            print(
+                f"Initial block version (first Sender Report in PCAP): "
+                f"{sr.ipmx_info.version}"
+            )
+            return
+    print(
+        "Initial block version (first Sender Report in PCAP): "
+        "none (no IPMX Info Block present)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CFG transport-descriptor parsing (streams/cfg/*.cfg)
 # ---------------------------------------------------------------------------

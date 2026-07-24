@@ -75,6 +75,7 @@ from ipmx_validate_common import (
     nominal_ticks_per_period_from_seconds,
     parse_exactframerate_arg,
     parse_sender_reports,
+    print_first_sr_block_version,
     rate_matches,
     resolve_exact_ticks_per_frame,
     run_cmax_hrd_check,
@@ -2260,6 +2261,7 @@ def main() -> int:
     if ctx.encrypted:
         print("[INFO] Encryption detected — payload content is not accessible.")
         print("       NAL content checks will be marked as untestable.\n")
+    print_first_sr_block_version(ctx.sender_reports)
     results = run_validation(ctx)
 
     hrd_results = ipmx_validate_hrd.run_hrd_checks(

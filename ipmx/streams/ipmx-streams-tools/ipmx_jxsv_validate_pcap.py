@@ -61,6 +61,7 @@ from ipmx_validate_common import (
     nominal_ticks_per_period_from_seconds,
     parse_exactframerate_arg,
     parse_sender_reports,
+    print_first_sr_block_version,
     resolve_exact_ticks_per_frame,
     simulate_cmax_leaky_bucket,
     summarize_results,
@@ -2680,6 +2681,7 @@ def main() -> int:
     print(f"RTP: {seq.summary()}")
     print(f"     {len(ctx.frames)} frames")
     print(f"RTCP: {len(ctx.sender_reports)} Sender Report(s)")
+    print_first_sr_block_version(ctx.sender_reports)
     if ctx.sdp is not None:
         s = ctx.sdp
         ppih_str = f"0x{s.ppih:04X}" if s.ppih is not None else "unknown"

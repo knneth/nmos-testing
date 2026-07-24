@@ -69,6 +69,7 @@ from ipmx_validate_common import (
     interval_variation_in_window,
     parse_exactframerate_arg,
     parse_sender_reports,
+    print_first_sr_block_version,
     resolve_exact_ticks_per_frame,
     simulate_cmax_leaky_bucket,
     summarize_results,
@@ -1516,6 +1517,7 @@ def main() -> int:
     print(f"RTP: {seq.summary()}")
     print(f"     {len(ctx.frames)} frames")
     print(f"RTCP: {len(ctx.sender_reports)} Sender Report(s)")
+    print_first_sr_block_version(ctx.sender_reports)
     if ctx.sdp is not None:
         s = ctx.sdp
         print(f"SDP:  sampling={s.sampling} width={s.width} height={s.height} "
