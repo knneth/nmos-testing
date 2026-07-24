@@ -1634,6 +1634,46 @@ def _format_payload(payload: dict) -> str:
     return "  " + "  ".join(parts) if parts else ""
 
 
+def _hid_kind_by_shape(data: bytes) -> usb_decode.HidBootProtocol:
+    """Fallback HID classification when no Configuration descriptor was captured.
+
+    A boot keyboard report is 8 bytes with a zero reserved byte (index 1); a
+    boot mouse report is 3-4 bytes.  Ambiguous shapes return NONE so nothing is
+    mis-decoded.
+    """
+    n = len(data)
+    if n >= 8 and data[1] == 0:
+        return usb_decode.HidBootProtocol.KEYBOARD
+    if 3 <= n <= 4:
+        return usb_decode.HidBootProtocol.MOUSE
+    return usb_decode.HidBootProtocol.NONE
+
+
+def _hid_report_lines(data: bytes, ep: Optional[usb_decode.EndpointInfo]) -> list[str]:
+    """ASCII-only annotation for a tunneled HID boot keyboard/mouse report.
+
+    Classification prefers the endpoint's boot-interface protocol (from a
+    Configuration descriptor captured earlier on the same channel) and falls
+    back to the report shape otherwise.  Idle reports (nothing pressed or moved)
+    and non-HID endpoints produce no line.
+    """
+    kind = usb_decode.classify_hid(ep) if ep is not None else _hid_kind_by_shape(data)
+    if kind == usb_decode.HidBootProtocol.KEYBOARD:
+        r = usb_decode.decode_keyboard_report(data)
+        if r is None or (not r.text and not r.modifiers):
+            return []
+        keys = f" keys={ascii(r.text)}" if r.text else ""
+        mods = f" mods=[{', '.join(r.modifiers)}]" if r.modifiers else ""
+        return [f"-> Keyboard{keys}{mods}"]
+    if kind == usb_decode.HidBootProtocol.MOUSE:
+        r = usb_decode.decode_mouse_report(data)
+        if r is None or (not r.buttons and r.dx == 0 and r.dy == 0 and r.wheel == 0):
+            return []
+        btns = f" buttons=[{', '.join(r.buttons)}]" if r.buttons else ""
+        return [f"-> Mouse{btns} dx={r.dx:+d} dy={r.dy:+d} wheel={r.wheel:+d}"]
+    return []
+
+
 def _print_messages(sess: Session, decode_usb: bool = False) -> None:
     """Print every message on the control channel and each data channel.
 
@@ -1645,8 +1685,15 @@ def _print_messages(sess: Session, decode_usb: bool = False) -> None:
     """
 
     def _usb_annotations(m: IpmxUsbMessage,
-                         setup_by_seqnum: dict[int, dict]) -> list[str]:
-        """Return decoded USB lines for one message, updating the SEQNUM map."""
+                         setup_by_seqnum: dict[int, dict],
+                         hid_endpoints: dict[int, usb_decode.EndpointInfo]) -> list[str]:
+        """Return decoded USB lines for one message, updating the correlation maps.
+
+        ``setup_by_seqnum`` correlates a SETUP request to its returned data;
+        ``hid_endpoints`` maps endpoint number -> EndpointInfo, learned from a
+        Configuration descriptor seen earlier on the channel, so a boot HID
+        interrupt report can be classified as keyboard vs mouse.
+        """
         p = m.payload
         if not p or p.get('_encrypted'):
             return []
@@ -1666,11 +1713,20 @@ def _print_messages(sess: Session, decode_usb: bool = False) -> None:
         # Any direction may carry returned/outgoing descriptor bytes.
         data_hex = p.get('transferdata')
         if data_hex:
+            data = bytes.fromhex(data_hex)
             setup = setup_by_seqnum.get(seqnum) if seqnum is not None else None
             hint_type = setup.get('descriptor_type') if setup else None
             hint_index = setup.get('descriptor_index') if setup else None
-            lines.extend(usb_decode.describe_descriptor(
-                bytes.fromhex(data_hex), hint_type, hint_index))
+            lines.extend(usb_decode.describe_descriptor(data, hint_type, hint_index))
+            # Learn endpoint->interface mapping from a Configuration descriptor so
+            # later interrupt reports on this channel can be classified.
+            if hint_type == usb_decode.DescriptorType.CONFIGURATION:
+                for ep in usb_decode.parse_config_descriptor(data):
+                    hid_endpoints[ep.endpoint_num] = ep
+            # Tunneled HID boot keyboard/mouse reports ride in interrupt returns.
+            if (m.msg_type_enum == MsgType.USB_INTERRUPT_SUBMIT_RETURN
+                    and p.get('direction') == 1):
+                lines.extend(_hid_report_lines(data, hid_endpoints.get(p.get('endpoint'))))
         return lines
 
     # Reference time (t0): earliest message timestamp across the whole session,
@@ -1689,6 +1745,7 @@ def _print_messages(sess: Session, decode_usb: bool = False) -> None:
         print(f"  {'#Pkt':<6} {'Time(ms)':>11} {'Dir':<30} {'Type':<38} {'Len':>6}  Payload")
         print(f"  {'-'*5:<6} {'-'*11:>11} {'-'*30:<30} {'-'*37:<38} {'-'*6}  {'-'*50}")
         setup_by_seqnum: dict[int, dict] = {}
+        hid_endpoints: dict[int, usb_decode.EndpointInfo] = {}
         for cm in messages:
             m = cm.msg
             src_short = f"{cm.src_ip.split('.')[-1]}:{cm.src_port}"
@@ -1698,7 +1755,7 @@ def _print_messages(sess: Session, decode_usb: bool = False) -> None:
             payload_str = _format_payload(m.payload)
             print(f"  {cm.packet_number:<6} {t_ms:>11.3f} {direction:<30} {m.msg_type_name:<38} {m.length:>6}{payload_str}")
             if decode_usb:
-                for line in _usb_annotations(m, setup_by_seqnum):
+                for line in _usb_annotations(m, setup_by_seqnum, hid_endpoints):
                     print(f"  {'':6} {'':11} {'':30} {line}")
 
     _dump("Control channel", sess.control.messages)
