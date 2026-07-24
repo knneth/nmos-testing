@@ -37,6 +37,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+# Decoded payloads can carry non-ASCII bytes (e.g. a vendor busid string that
+# isn't cleanly null-padded). Make stdout/stderr tolerant so such content never
+# raises UnicodeEncodeError on a legacy Windows code page. This must run before
+# scapy is imported, since scapy pulls in colorama which wraps stdout with the
+# strict console encoding.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="backslashreplace")
+
 try:
     from scapy.all import rdpcap, TCP, IP, Raw
     from scapy.utils import PcapReader
@@ -166,14 +175,28 @@ def _collect_streams(packets: list) -> dict[str, TcpConnection]:
         if not pkt.haslayer(TCP) or not pkt.haslayer(IP):
             continue
         tcp = pkt[TCP]
-        if not tcp.payload:
-            continue
-        payload = bytes(tcp.payload)
-        if not payload:
-            continue
+        ip = pkt[IP]
 
-        src_ip   = pkt[IP].src
-        dst_ip   = pkt[IP].dst
+        # Real TCP payload length from the IP total-length field. Short frames
+        # (e.g. bare ACK/SYN, 54 bytes) are zero-padded to Ethernet's 60-byte
+        # minimum, and scapy surfaces that padding as trailing TCP-payload
+        # bytes. Using bytes(tcp.payload) directly would inject phantom bytes
+        # into the reassembled stream — corrupting sequence tracking and
+        # dropping legitimate messages (e.g. a Receiver's SenderConnectionStatus
+        # whose header lands right after a padded ACK). Bound by ip.len, which
+        # accounts for IP/TCP options. When ip.len is 0 (e.g. TCP segmentation
+        # offload), fall back to the raw payload bytes.
+        raw = bytes(tcp.payload)
+        if ip.len:
+            seg_len = ip.len - (ip.ihl * 4) - (tcp.dataofs * 4)
+            if seg_len >= 0:
+                raw = raw[:seg_len]
+        if not raw:
+            continue
+        payload = raw
+
+        src_ip   = ip.src
+        dst_ip   = ip.dst
         src_port = tcp.sport
         dst_port = tcp.dport
 
@@ -206,6 +229,7 @@ def _parse_messages_from_connection(
     iv_mode_rev: pepmod.IvMode = pepmod.IvMode.SPEC,
     handshake_iv_fwd: Optional[int] = None,
     handshake_iv_rev: Optional[int] = None,
+    force_plaintext: bool = False,
 ) -> tuple[list[ChannelMessage], list[ChannelMessage]]:
     """
     Reassemble and parse IPMX USB messages from both directions of a connection.
@@ -260,7 +284,8 @@ def _parse_messages_from_connection(
                 if offset + length > len(block.data):
                     break
                 try:
-                    parsed = usb.parse_one(block.data, offset)
+                    parsed = usb.parse_one(block.data, offset,
+                                           force_plaintext=force_plaintext)
                 except ValueError as exc:
                     if verbose:
                         print(f"    Parse error at offset {offset}: {exc}")
@@ -321,6 +346,7 @@ def _identify_channels(
     pep_params: Optional[pepmod.PepParams] = None,
     iv_mode_s2r: pepmod.IvMode = pepmod.IvMode.SPEC,
     iv_mode_r2s: pepmod.IvMode = pepmod.IvMode.SPEC,
+    force_plaintext: bool = False,
 ) -> tuple[dict[str, tuple[str, list[ChannelMessage], list[ChannelMessage]]],
            dict[str, tuple[int, int, bool]]]:
     """
@@ -348,7 +374,8 @@ def _identify_channels(
     # which TCP direction corresponds to Sender-to-Receiver (S2R).
     classified: dict[str, tuple[str, TcpConnection, bool]] = {}
     for key, conn in connections.items():
-        fwd_msgs, rev_msgs = _parse_messages_from_connection(conn, verbose)
+        fwd_msgs, rev_msgs = _parse_messages_from_connection(
+            conn, verbose, force_plaintext=force_plaintext)
         all_msgs = sorted(fwd_msgs + rev_msgs, key=lambda m: m.packet_number)
         if not all_msgs:
             continue
@@ -429,7 +456,8 @@ def _identify_channels(
         Tries SSID 2 first (spec-required handshake SSID).  Falls back to
         brute-force 0-254 if CMAC fails with SSID 2.
         """
-        fwd, rev = _parse_messages_from_connection(conn, verbose=False)
+        fwd, rev = _parse_messages_from_connection(
+            conn, verbose=False, force_plaintext=force_plaintext)
         for m in sorted(fwd + rev, key=lambda x: x.packet_number):
             if m.msg.msg_type_enum == MsgType.USB_STREAM_INFO:
                 if not m.msg.is_encrypted:
@@ -533,7 +561,8 @@ def _identify_channels(
             pep_params=pep_params,
             iv_forward=iv_fwd, iv_reverse=iv_rev,
             iv_mode_fwd=ivm_fwd, iv_mode_rev=ivm_rev,
-            handshake_iv_fwd=hs_iv_fwd, handshake_iv_rev=hs_iv_rev)
+            handshake_iv_fwd=hs_iv_fwd, handshake_iv_rev=hs_iv_rev,
+            force_plaintext=force_plaintext)
 
         all_msgs = sorted(fwd_msgs + rev_msgs, key=lambda m: m.packet_number)
         if not all_msgs:
@@ -1323,7 +1352,7 @@ def analyze_pcap(
     sender_port: Optional[int] = None,
     sender_cid: Optional[bytes] = None,
     sender_sn: Optional[str] = None,
-    encrypted: bool = False,
+    encrypted: Optional[bool] = None,
     verbose: bool = False,
     show_tcp_issues: bool = False,
     pep_params: Optional[pepmod.PepParams] = None,
@@ -1385,16 +1414,25 @@ def analyze_pcap(
     if verbose:
         print(f"  Found {len(connections)} TCP stream(s)")
 
+    # --no-encrypted (encrypted is False) forces plaintext decoding even when a
+    # message header carries a non-zero CTR/KEYVERSION. --encrypted / auto leave
+    # the parser's own is_encrypted heuristic in charge.
+    force_plaintext = encrypted is False
+
     channel_map, ssid_findings = _identify_channels(
         connections, verbose,
         pep_key=pep_key, pep_params=pep_params,
         iv_mode_s2r=iv_mode_s2r,
-        iv_mode_r2s=iv_mode_r2s)
+        iv_mode_r2s=iv_mode_r2s,
+        force_plaintext=force_plaintext)
 
     # Auto-detect encryption from messages: if any message on any channel has
-    # non-zero CTR or KEYVERSION, treat the stream as encrypted.
+    # non-zero CTR or KEYVERSION, treat the stream as encrypted. Only runs when
+    # the caller left it unspecified (None); --encrypted / --no-encrypted force
+    # the value and skip detection.
     mac_failures = 0
-    if not encrypted:
+    if encrypted is None:
+        encrypted = False
         for _ctype, _smsgs, _rmsgs in channel_map.values():
             for cm in _smsgs + _rmsgs:
                 if cm.msg.is_encrypted:
@@ -1861,8 +1899,11 @@ def main() -> int:
                         help="Expected Sender CID as hex string, e.g. 0050C2")
     parser.add_argument('--sender-sn', default=None,
                         help="Expected Sender serial number string")
-    parser.add_argument('--encrypted', action='store_true',
-                        help="Stream is encrypted — only validate non-encrypted fields")
+    parser.add_argument('--encrypted', action=argparse.BooleanOptionalAction, default=None,
+                        help="Force encryption handling. --encrypted: treat the stream as "
+                             "encrypted (only validate non-encrypted fields). --no-encrypted: "
+                             "force plaintext validation, skipping auto-detection. "
+                             "Default: auto-detect from non-zero CTR/KEYVERSION/MAC.")
     parser.add_argument('--verbose', '-v', action='store_true',
                         help="Show stream classification details")
     parser.add_argument('--messages', '-m', action='store_true',

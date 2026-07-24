@@ -198,6 +198,13 @@ class IpmxUsbMessage:
     # --- decoded payload (filled by parse_data()) ---
     payload: dict = field(default_factory=dict)
 
+    # When set, the message is treated as plaintext even if CTR/KEYVERSION are
+    # non-zero — used by the dissector's --no-encrypted override so a stream a
+    # vendor mislabels as encrypted (non-zero KEYVERSION but plaintext DATA)
+    # can still be decoded. Does not suppress §12 CTR/KEYVERSION checks, which
+    # read the raw fields directly.
+    force_plaintext: bool = False
+
     @property
     def msg_type_enum(self) -> Optional[MsgType]:
         try:
@@ -212,6 +219,8 @@ class IpmxUsbMessage:
 
     @property
     def is_encrypted(self) -> bool:
+        if self.force_plaintext:
+            return False
         return self.ctr != 0 or self.key_version != 0
 
     @property
@@ -262,11 +271,15 @@ def _parse_header(raw: bytes, offset: int) -> tuple[int, int, int, int]:
     return ctr, key_version, msg_type, length
 
 
-def parse_one(raw: bytes, offset: int = 0) -> IpmxUsbMessage:
+def parse_one(raw: bytes, offset: int = 0, *,
+              force_plaintext: bool = False) -> IpmxUsbMessage:
     """
     Parse one complete IPMX USB TCP message from *raw* starting at *offset*.
 
     The caller must ensure ``len(raw) - offset >= length`` before calling.
+
+    When *force_plaintext* is True the DATA is decoded as plaintext even if
+    CTR/KEYVERSION are non-zero (see :attr:`IpmxUsbMessage.force_plaintext`).
     """
     ctr, key_version, msg_type, length = _parse_header(raw, offset)
 
@@ -288,6 +301,7 @@ def parse_one(raw: bytes, offset: int = 0) -> IpmxUsbMessage:
         mac=mac,
         raw=raw[offset:end],
         offset=offset,
+        force_plaintext=force_plaintext,
     )
     if msg.is_encrypted:
         # DATA is ciphertext — cannot decode field values.
@@ -298,7 +312,8 @@ def parse_one(raw: bytes, offset: int = 0) -> IpmxUsbMessage:
     return msg
 
 
-def parse_stream(stream_bytes: bytes) -> Iterator[IpmxUsbMessage]:
+def parse_stream(stream_bytes: bytes, *,
+                 force_plaintext: bool = False) -> Iterator[IpmxUsbMessage]:
     """
     Yield all complete :class:`IpmxUsbMessage` objects from a reassembled
     byte stream.  Stops when insufficient bytes remain for the next message.
@@ -310,7 +325,7 @@ def parse_stream(stream_bytes: bytes) -> Iterator[IpmxUsbMessage]:
         _, _, _, length = _parse_header(stream_bytes, offset)
         if offset + length > total:
             break  # incomplete trailing message — wait for more data
-        yield parse_one(stream_bytes, offset)
+        yield parse_one(stream_bytes, offset, force_plaintext=force_plaintext)
         offset += length
 
 
