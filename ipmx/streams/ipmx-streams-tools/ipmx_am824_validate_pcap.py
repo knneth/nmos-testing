@@ -56,6 +56,7 @@ from ipmx_validate_common import (
     configure_utf8_output,
     check_dscp_rtp_marking,
     check_dscp_sr_matches_rtp,
+    check_multicast_mac_mapping,
     check_sdp_ipmx_fmtp,
     check_sdp_multicast_source_filter,
     check_sdp_session_consistency,
@@ -1943,6 +1944,10 @@ def build_requirements() -> list[Requirement]:
         "IPMX Senders shall mark outgoing RTCP Sender Report packets with the "
         "same DSCP value as the respective RTP stream packets (TR-10-9 §16).",
         lambda c: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
+    add("RFC1112-MCAST-MAC", "shall",
+        "IPv4 multicast RTP packets SHALL use the RFC 1112 §6.4 Ethernet "
+        "destination MAC derived from the group address (01:00:5e + low 23 bits).",
+        lambda c: check_multicast_mac_mapping(c.pcap, c.stream_info))
     add("TR-10-1-8.7-SR-PRESENT", "shall", "RTCP Sender Reports shall be present", check_sr_present)
     add("TR-10-1-8.7-SR-IP", "shall", "RTCP Sender Reports shall use the same destination IP as RTP", check_sr_ip)
     add("TR-10-1-8.7-SR-PORT", "shall", "RTCP Sender Reports shall use the expected RTCP destination port", check_sr_port)

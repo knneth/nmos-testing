@@ -2041,6 +2041,115 @@ def check_dscp_sr_matches_rtp(
     )
 
 
+# ---------------------------------------------------------------------------
+# RFC 1112 §6.4 — IPv4 multicast → Ethernet MAC mapping
+# ---------------------------------------------------------------------------
+
+def _ipv4_multicast_to_mac(addr: str) -> str | None:
+    """Map an IPv4 multicast dotted-quad to its Ethernet MAC per RFC 1112 §6.4.
+
+    The MAC is ``01:00:5e`` followed by the low 23 bits of the group address
+    (lowercase colon-hex). Returns ``None`` if *addr* is not a dotted-quad IPv4
+    literal. Mirrors ``ipv4_multicast_to_mac`` in TP-10-1Sec13.1.py exactly.
+    """
+    parts = addr.split(".") if addr else []
+    if len(parts) != 4:
+        return None
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    ipint = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
+    low23 = ipint & 0x7FFFFF
+    o3 = (low23 >> 16) & 0x7F
+    o4 = (low23 >> 8) & 0xFF
+    o5 = low23 & 0xFF
+    return f"01:00:5e:{o3:02x}:{o4:02x}:{o5:02x}"
+
+
+# Cache of observed RTP destination-MAC distributions, keyed like the DSCP cache.
+_RTP_MAC_CACHE: dict[tuple, "Counter[str | None]"] = {}
+
+
+def scan_rtp_dst_mac(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+) -> "Counter[str | None]":
+    """Return a distribution of Ethernet destination MACs across the RTP stream.
+
+    Keys are the per-packet L2 destination MAC (``None`` when unavailable);
+    values are packet counts. A well-formed multicast stream marks every frame
+    with the same group MAC, so a healthy stream yields a single key. Memoised
+    per capture.
+    """
+    key = (
+        str(pcap_path),
+        getattr(stream_info, "dst_ip", None),
+        getattr(stream_info, "dst_port", None),
+        getattr(stream_info, "ssrc", None),
+    )
+    cached = _RTP_MAC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    dist: "Counter[str | None]" = Counter()
+    port = stream_info.dst_port if stream_info is not None else None
+    for pkt in ipmx_parse_rtp_pcap.iter_rtp_packets_stream(
+        pcap_path, port, stream_info=stream_info
+    ):
+        dist[pkt.dst_mac] += 1
+    _RTP_MAC_CACHE[key] = dist
+    return dist
+
+
+def check_multicast_mac_mapping(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """For IPv4 multicast RTP streams, the Ethernet destination MAC SHALL be
+    the RFC 1112 §6.4 mapping of the group address (``01:00:5e`` + low 23 bits).
+
+    Only applies to IPv4 multicast destinations — unicast and IPv6 are N/A —
+    matching the multicast-only scope of TP-10-1Sec13.1.py. The marking SHALL
+    also be consistent across the stream.
+    """
+    if stream_info is None:
+        return untestable("RTP stream not detected — cannot read destination MAC")
+    dst_ip = getattr(stream_info, "dst_ip", None) or ""
+    if not _is_ipv4_multicast(dst_ip):
+        return untestable(
+            f"destination {dst_ip or 'unknown'} is not IPv4 multicast — "
+            f"RFC 1112 L2 mapping N/A"
+        )
+    expected = _ipv4_multicast_to_mac(dst_ip)
+    if expected is None:
+        return untestable(f"cannot derive expected MAC from {dst_ip}")
+
+    dist = scan_rtp_dst_mac(pcap_path, stream_info)
+    observed = {m: c for m, c in dist.items() if m is not None}
+    total = sum(dist.values())
+    if total == 0:
+        return untestable("No RTP packets in stream — cannot read destination MAC")
+    if not observed:
+        return untestable("RTP packets carry no L2 destination MAC")
+    if len(observed) > 1:
+        return False, (
+            f"RTP stream uses inconsistent destination MACs {observed}; "
+            f"IPv4 multicast {dst_ip} SHALL map to {expected} (RFC 1112 §6.4)"
+        )
+    found = next(iter(observed))
+    if found != expected:
+        return False, (
+            f"RTP destination MAC {found} does not match the RFC 1112 §6.4 "
+            f"mapping {expected} for multicast group {dst_ip}"
+        )
+    return True, (
+        f"RTP destination MAC {found} matches the RFC 1112 §6.4 mapping for "
+        f"multicast group {dst_ip} (across {total} packets)"
+    )
+
+
 def check_sdp_dst_ip_vs_stream(
     sdp_media: "MediaDescriptor | None",
     stream_info: "Any | None",

@@ -1000,6 +1000,9 @@ class RTPPacket:
     # IPv4/IPv6 DS-field DSCP (top 6 bits) carried from the enclosing UDP
     # datagram; populated by iter_rtp_packets_stream for TR-10-9 §16 QoS.
     dscp: int | None = None
+    # Ethernet (L2) destination MAC (lowercase colon-hex) from the enclosing
+    # frame; populated by iter_rtp_packets_stream for RFC 1112 MAC validation.
+    dst_mac: str | None = None
 
 
 def parse_rtp_header(data: bytes) -> tuple[RTPPacket, int] | None:
@@ -1357,6 +1360,7 @@ def iter_rtp_packets_stream(
         rtp_pkt.src_port = udp.src_port
         rtp_pkt.dst_port = udp.dst_port
         rtp_pkt.dscp = udp.dscp
+        rtp_pkt.dst_mac = udp.dst_mac
         yield rtp_pkt
 
 

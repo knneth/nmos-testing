@@ -36,12 +36,13 @@ from typing import Iterator, Sequence
 
 try:
     from scapy.all import PcapReader
+    from scapy.layers.l2 import Ether
     from scapy.layers.inet import IP, UDP
     from scapy.layers.inet6 import IPv6
     SCAPY_AVAILABLE = True
 except Exception:
     PcapReader = None  # type: ignore[assignment]
-    IP = UDP = IPv6 = None  # type: ignore[assignment]
+    Ether = IP = UDP = IPv6 = None  # type: ignore[assignment]
     SCAPY_AVAILABLE = False
 
 
@@ -63,6 +64,10 @@ class UdpPacket:
     # DS field: IPv4 ToS byte >> 2, or IPv6 Traffic Class >> 2. None when the
     # packet is neither IPv4 nor IPv6. Needed for TR-10-9 §16 QoS validation.
     dscp: int | None = None
+    # Ethernet (L2) destination MAC as lowercase colon-hex ("01:00:5e:xx:yy:zz"),
+    # or None when unavailable. Needed to validate the RFC 1112 IPv4-multicast
+    # → Ethernet MAC mapping.
+    dst_mac: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +94,10 @@ def iter_udp_packets_scapy(
             src_ip: str | None = None
             dst_ip: str | None = None
             dscp: int | None = None
+            # Ethernet destination MAC (scapy renders it lowercase colon-hex).
+            dst_mac: str | None = None
+            if Ether is not None and pkt.haslayer(Ether):
+                dst_mac = str(pkt[Ether].dst).lower()
             if pkt.haslayer(IP):
                 ip_layer = pkt[IP]
                 src_ip = ip_layer.src
@@ -111,6 +120,7 @@ def iter_udp_packets_scapy(
                 src_port=int(udp.sport),
                 dst_port=int(udp.dport),
                 dscp=dscp,
+                dst_mac=dst_mac,
             )
 
 
@@ -165,6 +175,8 @@ def iter_udp_packets_manual(
 
             eth_type = int.from_bytes(packet_data[12:14], "big")
             ip_payload = packet_data[ETHERNET_HEADER_SIZE:]
+            # Ethernet destination MAC is the first 6 octets of the frame.
+            dst_mac: str | None = ":".join(f"{b:02x}" for b in packet_data[0:6])
             src_ip: str | None = None
             dst_ip: str | None = None
             dscp: int | None = None
@@ -237,6 +249,7 @@ def iter_udp_packets_manual(
                 src_port=udp_src_port,
                 dst_port=udp_dst_port,
                 dscp=dscp,
+                dst_mac=dst_mac,
             )
 
 
