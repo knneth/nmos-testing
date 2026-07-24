@@ -39,8 +39,11 @@ from ipmx_validate_common import (
     Requirement,
     RequirementResult,
     ValidationContext,
+    configure_utf8_output,
     build_rtp_report,
     build_timeline,
+    check_dscp_rtp_marking,
+    check_dscp_sr_matches_rtp,
     check_sdp_ipmx_fmtp,
     check_sdp_multicast_source_filter,
     check_sdp_session_consistency,
@@ -1322,6 +1325,8 @@ def build_requirements(ctx: ValidationContext) -> list[Requirement]:
     add("TR-10-9-11.2b", "shall", "IPMX Senders shall send IPMX Sender Reports for each frame at regular intervals that correspond to the Frame-to-Frame Interval. The difference between maximum and minimum of this interval measured over a 2 second period shall not exceed 2 mSec.", lambda c=ctx: check_sr_interval_tr10_9(c))
     add("TR-10-9-11.2c", "shall", "For a Baseband IPMX Sender the Frame-to-Frame Interval shall correspond to the timing of their baseband input signal.", lambda _: untestable("Baseband input not observable"))
     add("TR-10-9-11.2d", "shall", "For IPMX Senders not based on the conversion of a baseband signal, the Frame-to-Frame interval shall correspond to the nominal frame rate of the media signal.", lambda _: untestable("Sender type not observable"))
+    add("TR-10-9-16a", "shall", "IPMX Senders conforming to TR-10-7 (compressed video) shall mark RTP packets with the TR-10-9 §16 default DSCP AF42(36).", lambda c=ctx: check_dscp_rtp_marking(c.pcap, c.stream_info, 36))
+    add("TR-10-9-16b", "shall", "IPMX Senders shall mark outgoing RTCP Sender Report packets with the same DSCP value as the respective RTP stream packets (TR-10-9 §16).", lambda c=ctx: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
     add("TR-10-15c-97", "shall", "A UDP/IP packet shall not contain more than one VCL NAL Unit.", lambda c=ctx: check_packet_vcl_limit(c))
     add("TR-10-15c-99", "shall", "H.264 coded video shall be transmitted and decoded using the HRD transmitter and decoder schedules.", lambda _: untestable("HRD presence verified by TR-10-15c-110; schedule conformance not testable from PCAP"))
     add("TR-10-1-MIB-SIG", "shall", "MIB baseband signal parameters shall be internally consistent (htotal >= width, vtotal >= height, pixclk = htotal*vtotal*fps).", lambda c=ctx: check_mib_signal_sanity(c))
@@ -1532,6 +1537,7 @@ def _run_cmax_check(ctx: ValidationContext) -> list[RequirementResult]:
 
 
 def main() -> int:
+    configure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing RTP/RTCP")
     parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")

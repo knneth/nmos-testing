@@ -59,6 +59,10 @@ class UdpPacket:
     dst_ip: str | None
     src_port: int | None
     dst_port: int | None
+    # DSCP (6-bit Differentiated Services Code Point) from the IP header's
+    # DS field: IPv4 ToS byte >> 2, or IPv6 Traffic Class >> 2. None when the
+    # packet is neither IPv4 nor IPv6. Needed for TR-10-9 §16 QoS validation.
+    dscp: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +88,21 @@ def iter_udp_packets_scapy(
             capture_time = float(pkt.time)
             src_ip: str | None = None
             dst_ip: str | None = None
+            dscp: int | None = None
             if pkt.haslayer(IP):
                 ip_layer = pkt[IP]
                 src_ip = ip_layer.src
                 dst_ip = ip_layer.dst
+                # Scapy exposes the full 8-bit IPv4 ToS/DS byte as `tos`;
+                # DSCP is its top 6 bits.
+                dscp = (int(ip_layer.tos) >> 2) & 0x3F
             elif pkt.haslayer(IPv6):
                 ip6_layer = pkt[IPv6]
                 src_ip = ip6_layer.src
                 dst_ip = ip6_layer.dst
+                # Scapy exposes the 8-bit IPv6 Traffic Class as `tc`;
+                # DSCP is its top 6 bits.
+                dscp = (int(ip6_layer.tc) >> 2) & 0x3F
             yield UdpPacket(
                 payload=payload,
                 capture_time=capture_time,
@@ -99,6 +110,7 @@ def iter_udp_packets_scapy(
                 dst_ip=dst_ip,
                 src_port=int(udp.sport),
                 dst_port=int(udp.dport),
+                dscp=dscp,
             )
 
 
@@ -155,6 +167,7 @@ def iter_udp_packets_manual(
             ip_payload = packet_data[ETHERNET_HEADER_SIZE:]
             src_ip: str | None = None
             dst_ip: str | None = None
+            dscp: int | None = None
             udp_src_port: int | None = None
             udp_dst_port: int | None = None
             udp_payload = b""
@@ -165,6 +178,8 @@ def iter_udp_packets_manual(
                     continue
                 if ip_payload[9] != 17:
                     continue
+                # IPv4 ToS/DS byte is octet 1; DSCP is its top 6 bits.
+                dscp = (ip_payload[1] >> 2) & 0x3F
                 src_ip = socket.inet_ntoa(ip_payload[12:16])
                 dst_ip = socket.inet_ntoa(ip_payload[16:20])
                 udp_offset = ihl
@@ -181,6 +196,10 @@ def iter_udp_packets_manual(
                 )
                 udp_payload = ip_payload[udp_offset + 8 : udp_offset + udp_len]
             elif eth_type == 0x86DD and len(packet_data) >= 54:
+                # IPv6 Traffic Class spans the low nibble of octet 0 and the
+                # high nibble of octet 1; DSCP is the top 6 bits of that byte.
+                traffic_class = ((ip_payload[0] & 0x0F) << 4) | (ip_payload[1] >> 4)
+                dscp = (traffic_class >> 2) & 0x3F
                 src_ip = socket.inet_ntop(
                     socket.AF_INET6, packet_data[22:38]
                 )
@@ -217,6 +236,7 @@ def iter_udp_packets_manual(
                 dst_ip=dst_ip,
                 src_port=udp_src_port,
                 dst_port=udp_dst_port,
+                dscp=dscp,
             )
 
 

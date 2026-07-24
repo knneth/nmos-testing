@@ -1673,24 +1673,33 @@ def _print_messages(sess: Session, decode_usb: bool = False) -> None:
                 bytes.fromhex(data_hex), hint_type, hint_index))
         return lines
 
+    # Reference time (t0): earliest message timestamp across the whole session,
+    # so the Time(ms) column is comparable across the control and data channels.
+    all_ts = [cm.timestamp
+              for msgs in ([sess.control.messages]
+                           + [ch.messages for ch in sess.data_channels.values()])
+              for cm in msgs]
+    t0 = min(all_ts) if all_ts else 0.0
+
     def _dump(label: str, messages: list[ChannelMessage]) -> None:
         if not messages:
             print(f"\n  {label}: (no messages)")
             return
         print(f"\n  {label}  ({len(messages)} messages)")
-        print(f"  {'#Pkt':<6} {'Dir':<5} {'Type':<38} {'Len':>6}  Payload")
-        print(f"  {'-'*5:<6} {'-'*4:<5} {'-'*37:<38} {'-'*6}  {'-'*50}")
+        print(f"  {'#Pkt':<6} {'Time(ms)':>11} {'Dir':<30} {'Type':<38} {'Len':>6}  Payload")
+        print(f"  {'-'*5:<6} {'-'*11:>11} {'-'*30:<30} {'-'*37:<38} {'-'*6}  {'-'*50}")
         setup_by_seqnum: dict[int, dict] = {}
         for cm in messages:
             m = cm.msg
             src_short = f"{cm.src_ip.split('.')[-1]}:{cm.src_port}"
             dst_short = f"{cm.dst_ip.split('.')[-1]}:{cm.dst_port}"
             direction = f"{src_short}->{dst_short}"
+            t_ms = (cm.timestamp - t0) * 1000.0
             payload_str = _format_payload(m.payload)
-            print(f"  {cm.packet_number:<6} {direction:<30} {m.msg_type_name:<38} {m.length:>6}{payload_str}")
+            print(f"  {cm.packet_number:<6} {t_ms:>11.3f} {direction:<30} {m.msg_type_name:<38} {m.length:>6}{payload_str}")
             if decode_usb:
                 for line in _usb_annotations(m, setup_by_seqnum):
-                    print(f"  {'':6} {'':30} {line}")
+                    print(f"  {'':6} {'':11} {'':30} {line}")
 
     _dump("Control channel", sess.control.messages)
     for substreamid, ch in sess.data_channels.items():

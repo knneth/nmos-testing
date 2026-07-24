@@ -45,6 +45,9 @@ from ipmx_validate_common import (
     Requirement,
     RequirementResult,
     SenderReportInfo,
+    configure_utf8_output,
+    check_dscp_rtp_marking,
+    check_dscp_sr_matches_rtp,
     check_sdp_ipmx_fmtp,
     check_sdp_multicast_source_filter,
     check_sdp_session_consistency,
@@ -1195,6 +1198,16 @@ def build_requirements(ctx: RawValidationContext) -> list[Requirement]:
         "SR capture times SHALL have max-min variation <= 2ms over any 2s window (TR-10-9 §11.2).",
         lambda c=ctx: check_sr_interval_tr10_9(c))
 
+    # --- TR-10-9 §16: Quality of service (DSCP marking) ---
+    add("TR-10-9-16a", "shall",
+        "RTP packets SHALL be marked with the TR-10-9 §16 default DSCP AF42(36) "
+        "for uncompressed video (TR-10-2).",
+        lambda c=ctx: check_dscp_rtp_marking(c.pcap, c.stream_info, 36))
+    add("TR-10-9-16b", "shall",
+        "RTCP Sender Report packets SHALL carry the same DSCP as their RTP "
+        "stream (TR-10-9 §16).",
+        lambda c=ctx: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
+
     # --- SDP transport file cross-validation ---
     add("SDP-PORT", "shall",
         "SDP destination port SHALL match the detected RTP stream port.",
@@ -1397,6 +1410,7 @@ def _run_cmax_check(ctx: RawValidationContext) -> list[RequirementResult]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    configure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing raw video RTP/RTCP")
     parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")

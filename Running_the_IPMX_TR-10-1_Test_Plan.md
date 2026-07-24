@@ -175,8 +175,6 @@ Python scripts are used to verify conformance to TP-1 section 13. For a given fo
    - `IPMX_VENDOR_XYZ\audio-<guid>.sdp` - Audio SDP file
    - `IPMX_VENDOR_XYZ\video-<guid>.sender.caps.json` - Video Sender Capabilities file
    - `IPMX_VENDOR_XYZ\audio-<guid>.sender.caps.json` - Audio Sender Capabilities file
-   - `IPMX_VENDOR_XYZ\video-<guid>.receiver.caps.json` - Video Receiver Capabilities file
-   - `IPMX_VENDOR_XYZ\audio-<guid>.receiver.caps.json` - Audio Receiver Capabilities file
 
 
 #### Running the legacy scripts for each section
@@ -410,6 +408,10 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
     ```
     - Results are sorted with FAILED tests printed last
     - Review output for any failures (some may be expected per test plan)
+
+    - Those files are generated:
+        - `IPMX_VENDOR_XYZ\video-<guid>.receiver.caps.json` - Video Receiver Capabilities file
+        - `IPMX_VENDOR_XYZ\audio-<guid>.receiver.caps.json` - Audio Receiver Capabilities file
 
 6. **Sender and Receiver Capabilities Tests**
 

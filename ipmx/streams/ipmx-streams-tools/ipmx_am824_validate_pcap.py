@@ -53,6 +53,9 @@ from ipmx_validate_common import (
     Requirement,
     RequirementResult,
     SenderReportInfo,
+    configure_utf8_output,
+    check_dscp_rtp_marking,
+    check_dscp_sr_matches_rtp,
     check_sdp_ipmx_fmtp,
     check_sdp_multicast_source_filter,
     check_sdp_session_consistency,
@@ -1932,6 +1935,14 @@ def build_requirements() -> list[Requirement]:
     add("SDP-DST-IP", "shall",
         "SDP connection address SHALL match the detected destination IP.",
         check_sdp_dst_ip_vs_stream_am824)
+    add("TR-10-9-16a", "shall",
+        "IPMX Senders conforming to TR-10-12 (AES3 transparent audio) shall mark "
+        "RTP packets with the TR-10-9 §16 default DSCP AF41(34).",
+        lambda c: check_dscp_rtp_marking(c.pcap, c.stream_info, 34))
+    add("TR-10-9-16b", "shall",
+        "IPMX Senders shall mark outgoing RTCP Sender Report packets with the "
+        "same DSCP value as the respective RTP stream packets (TR-10-9 §16).",
+        lambda c: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
     add("TR-10-1-8.7-SR-PRESENT", "shall", "RTCP Sender Reports shall be present", check_sr_present)
     add("TR-10-1-8.7-SR-IP", "shall", "RTCP Sender Reports shall use the same destination IP as RTP", check_sr_ip)
     add("TR-10-1-8.7-SR-PORT", "shall", "RTCP Sender Reports shall use the expected RTCP destination port", check_sr_port)
@@ -2086,6 +2097,7 @@ def print_results(
 
 
 def main() -> int:
+    configure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing AM824 RTP")
     parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")

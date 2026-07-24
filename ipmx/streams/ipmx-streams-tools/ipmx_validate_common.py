@@ -136,6 +136,9 @@ class SenderReportInfo:
     ipmx_info: ipmx_sender_report.ParsedIPMXInfoBlock | None
     raw_blocks: list[ipmx_sender_report.ParsedMediaInfoBlock]
     reception_report_count: int = 0
+    # DS-field DSCP (top 6 bits) of the IP packet carrying this RTCP SR;
+    # used to enforce TR-10-9 §16 (SR marked identically to the RTP stream).
+    dscp: int | None = None
 
     @property
     def ntp_unix(self) -> float:
@@ -309,6 +312,7 @@ def parse_sender_reports(
                     ipmx_info=parsed.info_block,
                     raw_blocks=parsed.raw_blocks,
                     reception_report_count=parsed.reception_report_count,
+                    dscp=udp.dscp,
                 )
             )
     reports.sort(key=lambda sr: sr.capture_time)
@@ -1876,6 +1880,167 @@ def check_sdp_multicast_source_filter(
     )
 
 
+# ---------------------------------------------------------------------------
+# TR-10-9 §16 — Quality of service (DiffServ / DSCP marking)
+# ---------------------------------------------------------------------------
+
+# RFC 2474 / 2597 / 3246 code-point names, for human-readable verdicts.
+_DSCP_NAMES: dict[int, str] = {
+    46: "EF",
+    34: "AF41", 36: "AF42", 38: "AF43",
+    26: "AF31", 28: "AF32", 30: "AF33",
+    18: "AF21", 20: "AF22", 22: "AF23",
+    10: "AF11", 12: "AF12", 14: "AF13",
+    0: "CS0/BE",
+}
+
+
+def _fmt_dscp(value: int | None) -> str:
+    """Render a DSCP value as ``36 (AF42)`` for verdict messages."""
+    if value is None:
+        return "unknown"
+    name = _DSCP_NAMES.get(value)
+    return f"{value} ({name})" if name else f"{value}"
+
+
+# Cache of observed RTP DSCP distributions, keyed by (pcap, stream identity),
+# so the RTP marking check and the SR-matches-RTP check share a single pass.
+_RTP_DSCP_CACHE: dict[tuple, "Counter[int | None]"] = {}
+
+
+def scan_rtp_dscp(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+) -> "Counter[int | None]":
+    """Return a distribution of DS-field DSCP values across the RTP stream.
+
+    Keys are the per-packet DSCP (``None`` when the packet is not IP); values
+    are packet counts. A well-formed sender marks every packet identically, so
+    a healthy stream yields a single key. The result is memoised per capture.
+    """
+    key = (
+        str(pcap_path),
+        getattr(stream_info, "dst_ip", None),
+        getattr(stream_info, "dst_port", None),
+        getattr(stream_info, "ssrc", None),
+    )
+    cached = _RTP_DSCP_CACHE.get(key)
+    if cached is not None:
+        return cached
+    dist: "Counter[int | None]" = Counter()
+    port = stream_info.dst_port if stream_info is not None else None
+    for pkt in ipmx_parse_rtp_pcap.iter_rtp_packets_stream(
+        pcap_path, port, stream_info=stream_info
+    ):
+        dist[pkt.dscp] += 1
+    _RTP_DSCP_CACHE[key] = dist
+    return dist
+
+
+def _dominant_rtp_dscp(
+    dist: "Counter[int | None]",
+) -> tuple[int | None, bool]:
+    """Reduce an RTP DSCP distribution to ``(value, consistent)``.
+
+    ``consistent`` is False when the stream carries more than one distinct
+    IP-layer DSCP value. ``value`` is the sole observed DSCP when consistent,
+    else the most common one (for reporting). Returns ``(None, ...)`` when no
+    IP-layer DSCP was observed at all.
+    """
+    observed = {d: c for d, c in dist.items() if d is not None}
+    if not observed:
+        return None, True
+    consistent = len(observed) == 1
+    dominant = max(observed, key=lambda d: observed[d])
+    return dominant, consistent
+
+
+def check_dscp_rtp_marking(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+    expected_dscp: int,
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """RTP media packets SHALL carry the TR-10-9 §16 default DSCP for the
+    media type (AF42/36 for TR-10-2/4/7/11 video, AF41/34 for TR-10-3/12
+    audio), and the marking SHALL be consistent across the stream.
+
+    §16 also states devices *should* provide a user mechanism to select DSCP
+    markings, so a value that differs from the default is a violation only if
+    it was not intentionally configured. The verdict message flags that.
+    """
+    if stream_info is None:
+        return untestable("RTP stream not detected — cannot read DSCP")
+    dist = scan_rtp_dscp(pcap_path, stream_info)
+    total = sum(dist.values())
+    if total == 0:
+        return untestable("No RTP packets in stream — cannot read DSCP")
+    dominant, consistent = _dominant_rtp_dscp(dist)
+    if dominant is None:
+        return untestable("RTP packets carry no IP-layer DSCP")
+
+    readable = {_fmt_dscp(d): c for d, c in dist.items()}
+    if not consistent:
+        return False, (
+            f"RTP stream marks inconsistent DSCP values {readable}; "
+            f"TR-10-9 §16 requires a single default marking of "
+            f"{_fmt_dscp(expected_dscp)}"
+        )
+    if dominant != expected_dscp:
+        return False, (
+            f"RTP marked {_fmt_dscp(dominant)}; TR-10-9 §16 default for this "
+            f"media type is {_fmt_dscp(expected_dscp)} "
+            f"(a non-default DSCP is permitted by §16 only when the user has "
+            f"intentionally configured it)"
+        )
+    return True, (
+        f"RTP marked {_fmt_dscp(dominant)} across {total} packets — matches "
+        f"TR-10-9 §16 default"
+    )
+
+
+def check_dscp_sr_matches_rtp(
+    pcap_path: Path,
+    stream_info: "ipmx_parse_rtp_pcap.RtpStreamInfo | None",
+    sender_reports: list[SenderReportInfo],
+) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """RTCP Sender Report packets SHALL be marked with the same DSCP value as
+    the RTP stream they describe (TR-10-9 §16). Unlike the default-value rule,
+    this is unconditional: whatever DSCP the RTP stream uses, the SRs must
+    match it.
+    """
+    if not sender_reports:
+        return untestable("No RTCP Sender Reports — cannot compare DSCP")
+    if stream_info is None:
+        return untestable("RTP stream not detected — cannot compare SR DSCP")
+    rtp_dominant, rtp_consistent = _dominant_rtp_dscp(
+        scan_rtp_dscp(pcap_path, stream_info)
+    )
+    if rtp_dominant is None:
+        return untestable(
+            "RTP stream carries no IP-layer DSCP — nothing to match against"
+        )
+    if not rtp_consistent:
+        return untestable(
+            "RTP stream DSCP is inconsistent — resolve RTP marking first"
+        )
+
+    sr_dist = Counter(sr.dscp for sr in sender_reports)
+    if all(d is None for d in sr_dist):
+        return untestable("RTCP SR packets carry no IP-layer DSCP")
+    mismatched = {d for d in sr_dist if d is not None and d != rtp_dominant}
+    if mismatched:
+        readable = {_fmt_dscp(d): c for d, c in sr_dist.items()}
+        return False, (
+            f"RTCP SR DSCP {readable} does not match RTP stream DSCP "
+            f"{_fmt_dscp(rtp_dominant)}; TR-10-9 §16 requires SRs marked "
+            f"identically to their RTP stream"
+        )
+    return True, (
+        f"RTCP SR marked {_fmt_dscp(rtp_dominant)} across "
+        f"{len(sender_reports)} report(s) — matches RTP stream (TR-10-9 §16)"
+    )
+
+
 def check_sdp_dst_ip_vs_stream(
     sdp_media: "MediaDescriptor | None",
     stream_info: "Any | None",
@@ -2109,6 +2274,26 @@ def requirement_is_untestable_by_design(check: Any) -> bool:
         and params[0].name == "_"
         and params[0].default is inspect.Parameter.empty
     )
+
+
+def configure_utf8_output() -> None:
+    """Force stdout/stderr to UTF-8 so validator output never crashes.
+
+    Requirement text and verdict details legitimately contain non-ASCII
+    characters (``§``, ``≤``, ``≥``, ``×``, ``·``, em dashes). On Windows the
+    default console/pipe codepage is cp1252, which cannot encode several of
+    them, so an unguarded ``print`` raises ``UnicodeEncodeError`` mid-report.
+    Reconfiguring to UTF-8 with ``errors="replace"`` makes output portable and
+    crash-proof regardless of the host codepage. Safe to call more than once.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue  # not a TextIOWrapper (e.g. redirected to a custom sink)
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass  # stream already detached/closed — leave it as-is
 
 
 def print_requirements_list(source: str, reqs: list[Requirement]) -> None:

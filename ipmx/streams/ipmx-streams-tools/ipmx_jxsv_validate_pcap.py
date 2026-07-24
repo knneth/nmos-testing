@@ -37,6 +37,9 @@ from ipmx_validate_common import (
     Requirement,
     RequirementResult,
     SenderReportInfo,
+    configure_utf8_output,
+    check_dscp_rtp_marking,
+    check_dscp_sr_matches_rtp,
     check_sdp_ipmx_fmtp,
     check_sr_initial_rtp_clock,
     check_sr_ntp_self_consistent,
@@ -2334,6 +2337,16 @@ def build_requirements(ctx: JXSVValidationContext) -> list[Requirement]:
         "For non-baseband IPMX Senders the frame interval SHALL correspond to the nominal frame rate.",
         lambda _: untestable("Sender type not observable"))
 
+    # --- TR-10-9 §16: Quality of service (DSCP marking) ---
+    add("TR-10-9-16a", "shall",
+        "RTP packets SHALL be marked with the TR-10-9 §16 default DSCP AF42(36) "
+        "for constant-bit-rate compressed video (TR-10-11).",
+        lambda c=ctx: check_dscp_rtp_marking(c.pcap, c.stream_info, 36))
+    add("TR-10-9-16b", "shall",
+        "RTCP Sender Report packets SHALL carry the same DSCP as their RTP "
+        "stream (TR-10-9 §16).",
+        lambda c=ctx: check_dscp_sr_matches_rtp(c.pcap, c.stream_info, c.sender_reports))
+
     # --- SDP transport file cross-validation (when --sdp is provided) ---
     add("SDP-PORT", "shall",
         "SDP destination port SHALL match the detected RTP stream port.",
@@ -2554,6 +2567,7 @@ def _run_cmax_check(ctx: JXSVValidationContext) -> list[RequirementResult]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    configure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pcap", type=Path, nargs="?", help="PCAP file containing JXSV RTP/RTCP")
     parser.add_argument("--list-requirements", action="store_true", help="List all requirement IDs this validator checks, then exit (no PCAP needed)")
