@@ -337,6 +337,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
     ```
     - Results are sorted with FAILED tests printed last
     - Review output for any failures (some may be expected per test plan)
+    - The multicast address and port of the DuT must be re-configured after this test.
 
     - Activate reference or preferred Senders, each one using a configuration from the `cfg` directory and have the Receivers of the DuT subscribe to the streams.
 
@@ -349,7 +350,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
 
 4. **IS-11 Stream Compatibility Tests**
 
-    - For HDMI, use a source that follows the EDID’s preferred mode. If such a source is not available, set the CONFIG.IS11_SOURCE_EDID_VERIFICATION to False and let the test verify the EDID or set the CONFIG.IS11_SOURCE_EDID_VERIFICATION option to True and verify manually, connecting a source device (e.g., a Kramer) that allows verifying the EDID produced by the DuT. For manual verification, the test suite will pause and indicate the expected refresh/sample rate value to be verified in the EDID’s preferred mode using the tool.
+    - For HDMI, use a source that follows the EDID’s preferred mode. If such a source is not available, set in UserConfig.py the CONFIG.IS11_SOURCE_EDID_VERIFICATION to False and let the test verify the EDID or set the CONFIG.IS11_SOURCE_EDID_VERIFICATION option to True and verify manually, connecting a source device (e.g., a Kramer) that allows verifying the EDID produced by the DuT. For manual verification, the test suite will pause and indicate the expected refresh/sample rate value to be verified in the EDID’s preferred mode using the tool.
     - Activate the Senders of the DuT, each one using a configuration from the `cfg` directory
     - The source must be directly connected to the Sender.
 
@@ -372,7 +373,7 @@ These tests verify that your Device Under Test (DuT) correctly implements the NM
     IPMX-CHECK-HDMI-IS11s.bat
     ```
     - Activate reference or preferred Senders, each one using a configuration from the `cfg` directory and have the Receivers of the DuT subscribe to the streams.
-    - Make sure the reference or preferred Senders are properly configured in the UserConfig.py file. The reference or preferred Sender must be used by only one Receiver at a time because the test will de-activate and re-activate it.
+    - Make sure the reference or preferred Senders are properly configured in the UserConfig.py file. The reference or preferred Sender must be used by only one Receiver at a time because the test may de-activate and re-activate it.
     - The DuT output must be connected.
 
     - Test the Receivers of the DuT:
