@@ -2609,27 +2609,33 @@ def convert_caps_json_to_caps(caps_json: Dict[str, Any]) -> Caps:
 
     def parse_range_value(cap_constraints : Dict[str, Any], range_type: RangeType) -> RangeValue:
 
+        def parse_item(item):
+            if not isinstance(item, dict):
+                return item
+
+            if range_type not in (RangeType.RATIONAL, RangeType.UNTYPED):
+                raise ValueError(f"Invalid constraint object for non-rational type {range_type}: {item}")
+
+            numerator : Optional[int] = item.get("numerator") # type: ignore
+            denominator : Optional[int] = item.get("denominator", 1) # type: ignore
+            if numerator is not None and isinstance(numerator, int) and (denominator is None or isinstance(denominator, int)):
+                try:
+                    fraction = Fraction(numerator, denominator)
+                    return fraction
+                except ZeroDivisionError:
+                    raise ValueError(f"Invalid fraction with denominator 0 in capability constraints: {item}")
+            else:
+                raise ValueError(f"Invalid constraint object without 'numerator': {item}")
+
         infinite = False  # Default value
-        min = cap_constraints.get("minimum")
-        max = cap_constraints.get("maximum")
+        min = parse_item(cap_constraints.get("minimum"))
+        max = parse_item(cap_constraints.get("maximum"))
         enumerated : List[Union[bool, int, float, Fraction, str]] = []
 
         if "enum" in cap_constraints:
             enum_list = cap_constraints["enum"]
             for item in enum_list:
-                if isinstance(item, dict):
-                    numerator : Optional[int] = item.get("numerator") # type: ignore
-                    denominator : Optional[int] = item.get("denominator", 1) # type: ignore
-                    if numerator is not None and isinstance(numerator, int) and (denominator is None or isinstance(denominator, int)):
-                        try:
-                            fraction = Fraction(numerator, denominator)
-                            enumerated.append(fraction)
-                        except ZeroDivisionError:
-                            raise ValueError(f"Invalid fraction with denominator 0 in capability constraints: {item}")
-                    else:
-                        raise ValueError(f"Invalid enumerated dict without 'numerator': {item}")
-                else:
-                    enumerated.append(item)
+                enumerated.append(parse_item(item))
 
         if min is None and max is None and not "enum" in cap_constraints:
             infinite = True
